@@ -1,0 +1,161 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id              BigInt   @id @default(autoincrement())
+  fullName        String   @map("full_name") @db.VarChar(100)
+  phoneNumber     String   @unique @map("phone_number") @db.VarChar(20)
+  passwordHash    String   @map("password_hash") @db.VarChar(255)
+  referralCode    String?  @map("referral_code") @db.VarChar(20)
+  ownReferralCode String?  @unique @map("own_referral_code") @db.VarChar(20)
+  isAdult         Boolean  @default(false) @map("is_adult")
+  agreedTerms     Boolean  @default(false) @map("agreed_terms")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  conversations   Conversation[]
+  kycVerification KycVerification?
+
+  @@map("users")
+}
+
+model Page {
+  path    String @id @db.VarChar(50)
+  label   String @db.VarChar(50)
+  section String @db.VarChar(30)
+
+  roles RolePage[]
+
+  @@map("pages")
+}
+
+model Role {
+  id         BigInt   @id @default(autoincrement())
+  name       String   @unique @db.VarChar(50)
+  canApprove Boolean  @default(false) @map("can_approve")
+  isBuiltIn  Boolean  @default(false) @map("is_built_in")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  pages    RolePage[]
+  accounts Account[]
+
+  @@map("roles")
+}
+
+model RolePage {
+  roleId   BigInt @map("role_id")
+  pagePath String @map("page_path") @db.VarChar(50)
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  page Page @relation(fields: [pagePath], references: [path], onDelete: Cascade)
+
+  @@id([roleId, pagePath])
+  @@map("role_pages")
+}
+
+model Account {
+  id           BigInt   @id @default(autoincrement())
+  username     String   @unique @db.VarChar(50)
+  passwordHash String   @map("password_hash") @db.VarChar(255)
+  roleId       BigInt   @map("role_id")
+  percentage   Decimal? @db.Decimal(5, 2)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  role Role @relation(fields: [roleId], references: [id])
+
+  assignedConversations Conversation[]
+  sentMessages          Message[]
+  reviewedKyc           KycVerification[]
+
+  @@map("accounts")
+}
+
+model Conversation {
+  id            BigInt   @id @default(autoincrement())
+  userId        BigInt   @map("user_id")
+  assignedAgent BigInt?  @map("assigned_agent")
+  status        String   @default("open") @db.VarChar(20)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agent    Account?  @relation(fields: [assignedAgent], references: [id], onDelete: SetNull)
+  messages Message[]
+
+  @@map("conversations")
+}
+
+model Message {
+  id              BigInt   @id @default(autoincrement())
+  conversationId  BigInt   @map("conversation_id")
+  senderType      String   @map("sender_type") @db.VarChar(10)
+  senderAccountId BigInt?  @map("sender_account_id")
+  body            String
+  isRead          Boolean  @default(false) @map("is_read")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  conversation  Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderAccount Account?     @relation(fields: [senderAccountId], references: [id])
+
+  @@map("messages")
+}
+
+model KycVerification {
+  id               BigInt    @id @default(autoincrement())
+  userId           BigInt    @unique @map("user_id")
+  documentType     String    @map("document_type") @db.VarChar(20)
+  documentFrontUrl String    @map("document_front_url") @db.VarChar(500)
+  documentBackUrl  String    @map("document_back_url") @db.VarChar(500)
+  selfieUrl        String    @map("selfie_url") @db.VarChar(500)
+  status           String    @default("pending") @db.VarChar(20)
+  rejectReason     String?   @map("reject_reason")
+  reviewedBy       BigInt?   @map("reviewed_by")
+  reviewedAt       DateTime? @map("reviewed_at") @db.Timestamptz
+  submittedAt      DateTime  @default(now()) @map("submitted_at") @db.Timestamptz
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewer Account? @relation(fields: [reviewedBy], references: [id], onDelete: SetNull)
+
+  @@map("kyc_verifications")
+}
+
+model SliderImage {
+  id           BigInt   @id @default(autoincrement())
+  imageUrl     String   @map("image_url") @db.VarChar(500)
+  originalName String   @map("original_name") @db.VarChar(255)
+  sortOrder    Int      @default(0) @map("sort_order")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  @@map("slider_images")
+}
+
+model PromoImage {
+  id           BigInt   @id @default(autoincrement())
+  imageUrl     String   @map("image_url") @db.VarChar(500)
+  originalName String   @map("original_name") @db.VarChar(255)
+  sortOrder    Int      @default(0) @map("sort_order")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  @@map("promo_images")
+}
