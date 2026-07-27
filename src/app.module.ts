@@ -12,6 +12,7 @@ import { ChatModule } from './chat/chat.module';
 import { SliderImagesModule } from './slider-images/slider-images.module';
 import { KycModule } from './kyc/kyc.module';
 import { PromoImagesModule } from './promo-images/promo-images.module';
+import { GamesModule } from './games/games.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { PromoImagesModule } from './promo-images/promo-images.module';
     SliderImagesModule,
     KycModule,
     PromoImagesModule,
+    GamesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
