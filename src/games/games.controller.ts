@@ -1,27 +1,45 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
+import { GamesService } from './games.service';
+import { LaunchGameDto } from './dto/launch-game.dto';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
-// Placeholder endpoint for a game provider's seamless-wallet callback.
-// Every provider (Evolution, Pragmatic Play, Slotegrator, etc.) uses a
-// different request/response contract and signature scheme, so until we
-// have that provider's real API docs this just logs whatever arrives and
-// returns a generic success response — enough for onboarding/ping checks
-// to succeed against a real, reachable URL instead of a 404.
-@Controller('games/callback')
+@Controller()
 export class GamesController {
   private readonly logger = new Logger(GamesController.name);
 
-  @Get()
+  constructor(private readonly gamesService: GamesService) {}
+
+  @UseGuards(JwtAuthGuard)
+  @Post('games/launch')
+  launch(@Req() req: { user: { userId: string } }, @Body() dto: LaunchGameDto) {
+    return this.gamesService.launchGame(req.user.userId, dto.gameUid);
+  }
+
+  @Get('games/providers')
+  getProviders() {
+    return this.gamesService.getProviders();
+  }
+
+  @Get('games/providers/:code')
+  getProviderGames(@Param('code') code: string) {
+    return this.gamesService.getProviderGames(code);
+  }
+
+  // Oracle pings this with GET during onboarding/verification.
+  @Get('games/callback')
   @HttpCode(HttpStatus.OK)
   ping(@Query() query: Record<string, unknown>) {
     this.logger.log(`GET ping received: ${JSON.stringify(query)}`);
     return { status: 'OK' };
   }
 
-  @Post()
+  // Oracle posts every bet/win event here; we must respond with the
+  // player's updated balance after applying it.
+  @Post('games/callback')
   @HttpCode(HttpStatus.OK)
-  receive(@Body() body: unknown, @Req() req: Request) {
+  async callback(@Body() body: Parameters<GamesService['handleCallback']>[0], @Req() req: Request) {
     this.logger.log(`POST callback received from ${req.ip}: ${JSON.stringify(body)}`);
-    return { status: 'OK' };
+    return this.gamesService.handleCallback(body);
   }
 }

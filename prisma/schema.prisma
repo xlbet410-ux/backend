@@ -22,11 +22,14 @@ model User {
   ownReferralCode String?  @unique @map("own_referral_code") @db.VarChar(20)
   isAdult         Boolean  @default(false) @map("is_adult")
   agreedTerms     Boolean  @default(false) @map("agreed_terms")
+  balance         Decimal  @default(0) @db.Decimal(14, 2)
+  gameAccount     String?  @unique @map("game_account") @db.VarChar(10)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz
 
-  conversations   Conversation[]
-  kycVerification KycVerification?
+  conversations    Conversation[]
+  kycVerification  KycVerification?
+  gameTransactions GameTransaction[]
 
   @@map("users")
 }
@@ -158,4 +161,22 @@ model PromoImage {
   updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz
 
   @@map("promo_images")
+}
+
+model GameTransaction {
+  id           BigInt   @id @default(autoincrement())
+  userId       BigInt   @map("user_id")
+  gameUid      String   @map("game_uid") @db.VarChar(64)
+  gameRound    String   @map("game_round") @db.VarChar(64)
+  serialNumber String   @unique @map("serial_number") @db.VarChar(64)
+  betAmount    Decimal  @default(0) @map("bet_amount") @db.Decimal(14, 2)
+  winAmount    Decimal  @default(0) @map("win_amount") @db.Decimal(14, 2)
+  currencyCode String   @map("currency_code") @db.VarChar(10)
+  balanceAfter Decimal  @map("balance_after") @db.Decimal(14, 2)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("game_transactions")
 }

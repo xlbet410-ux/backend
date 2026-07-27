@@ -1,6 +1,7 @@
 import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -28,13 +29,14 @@ export class AuthService {
     fullName: string;
     phoneNumber: string;
     ownReferralCode: string | null;
+    balance: Prisma.Decimal;
   }) {
     return {
       id: user.id.toString(),
       name: user.fullName,
       phone: user.phoneNumber,
       referralCode: user.ownReferralCode,
-      balance: '৳0',
+      balance: `৳${Number(user.balance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
     };
   }
 
