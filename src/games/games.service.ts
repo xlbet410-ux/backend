@@ -1,12 +1,24 @@
-import { BadRequestException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { CatalogGame, GAME_CATEGORIES, GameCategory } from './catalog.types';
+import { categorizeGame } from './category.util';
 
 const ORACLE_BASE_URL_DEFAULT = 'https://oraclegames.net/api';
 const GAME_ACCOUNT_LENGTH = 10;
 const GAME_ACCOUNT_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
+const CATALOG_TTL_MS = 10 * 60 * 1000;
+const PROVIDER_FETCH_DELAY_MS = 300;
 
 type CallbackPayload = {
   game_uid: string;
@@ -20,13 +32,29 @@ type CallbackPayload = {
 };
 
 @Injectable()
-export class GamesService {
+export class GamesService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(GamesService.name);
+
+  private catalogCache: { games: CatalogGame[]; fetchedAt: number } | null = null;
+  private buildingPromise: Promise<CatalogGame[]> | null = null;
+  private refreshTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
   ) {}
+
+  onModuleInit(): void {
+    // Fire-and-forget: don't block Nest's own bootstrap on a ~40-90s Oracle sweep.
+    void this.ensureCatalog();
+    this.refreshTimer = setInterval(() => {
+      void this.rebuildCatalog();
+    }, CATALOG_TTL_MS);
+  }
+
+  onModuleDestroy(): void {
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
+  }
 
   private get baseUrl(): string {
     return this.config.get<string>('ORACLE_BASE_URL') ?? ORACLE_BASE_URL_DEFAULT;
@@ -102,6 +130,92 @@ export class GamesService {
       throw new BadRequestException("Couldn't load this provider's game list.");
     }
     return res.json();
+  }
+
+  /**
+   * Returns the cached catalog. Blocks only on a cold start (no cache yet);
+   * a stale cache kicks off a background refresh but is still returned
+   * immediately, so a normal request never waits on a live Oracle sweep.
+   */
+  private async ensureCatalog(): Promise<CatalogGame[]> {
+    if (!this.catalogCache) return this.rebuildCatalog();
+    if (Date.now() - this.catalogCache.fetchedAt > CATALOG_TTL_MS) {
+      void this.rebuildCatalog();
+    }
+    return this.catalogCache.games;
+  }
+
+  /** Single-flight: concurrent callers await the same in-flight build. */
+  private async rebuildCatalog(): Promise<CatalogGame[]> {
+    if (this.buildingPromise) return this.buildingPromise;
+
+    this.buildingPromise = this.buildCatalog()
+      .then((games) => {
+        this.catalogCache = { games, fetchedAt: Date.now() };
+        return games;
+      })
+      .finally(() => {
+        this.buildingPromise = null;
+      });
+
+    return this.buildingPromise;
+  }
+
+  private async buildCatalog(): Promise<CatalogGame[]> {
+    const started = Date.now();
+    const providers = (await this.getProviders()) as Array<{ code: string; name: string; status: number }>;
+    const active = Array.isArray(providers) ? providers.filter((p) => p.status === 1) : [];
+
+    const out: CatalogGame[] = [];
+    for (const provider of active) {
+      try {
+        const data = (await this.getProviderGames(provider.code)) as {
+          games?: Array<{
+            name: string;
+            game_uid: string;
+            category: string;
+            thumbnail: string;
+            original: string;
+            status: number;
+          }>;
+        };
+        for (const g of data.games ?? []) {
+          if (g.status !== 1) continue;
+          out.push({
+            name: g.name,
+            gameUid: g.game_uid,
+            providerCode: provider.code,
+            providerName: provider.name,
+            category: categorizeGame(g.category, provider.code, provider.name),
+            thumbnail: g.thumbnail,
+            original: g.original,
+          });
+        }
+      } catch (err) {
+        this.logger.warn(`Catalog build: skipping provider ${provider.code} (${(err as Error).message})`);
+      }
+      await new Promise((r) => setTimeout(r, PROVIDER_FETCH_DELAY_MS));
+    }
+
+    this.logger.log(`Catalog build finished: ${out.length} games from ${active.length} providers in ${Date.now() - started}ms`);
+    return out;
+  }
+
+  async getCatalogCounts(): Promise<Record<GameCategory, number>> {
+    const games = await this.ensureCatalog();
+    const counts = Object.fromEntries(GAME_CATEGORIES.map((c) => [c, 0])) as Record<GameCategory, number>;
+    for (const g of games) counts[g.category]++;
+    return counts;
+  }
+
+  async getCatalogPage(
+    category: GameCategory,
+    page: number,
+    pageSize: number,
+  ): Promise<{ games: CatalogGame[]; total: number }> {
+    const all = (await this.ensureCatalog()).filter((g) => g.category === category);
+    const start = (page - 1) * pageSize;
+    return { games: all.slice(start, start + pageSize), total: all.length };
   }
 
   async handleCallback(payload: CallbackPayload) {

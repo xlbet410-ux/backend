@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Param, Post, Query
 import type { Request } from 'express';
 import { GamesService } from './games.service';
 import { LaunchGameDto } from './dto/launch-game.dto';
+import { GetCatalogQueryDto } from './dto/get-catalog.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller()
@@ -14,6 +15,16 @@ export class GamesController {
   @Post('games/launch')
   launch(@Req() req: { user: { userId: string } }, @Body() dto: LaunchGameDto) {
     return this.gamesService.launchGame(req.user.userId, dto.gameUid);
+  }
+
+  @Get('games/catalog/counts')
+  getCatalogCounts() {
+    return this.gamesService.getCatalogCounts();
+  }
+
+  @Get('games/catalog')
+  getCatalog(@Query() query: GetCatalogQueryDto) {
+    return this.gamesService.getCatalogPage(query.category, query.page, query.pageSize);
   }
 
   @Get('games/providers')
