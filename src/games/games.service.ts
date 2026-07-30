@@ -16,7 +16,11 @@ import { categorizeGame } from './category.util';
 
 const ORACLE_BASE_URL_DEFAULT = 'https://oraclegames.net/api';
 const GAME_ACCOUNT_LENGTH = 10;
-const GAME_ACCOUNT_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
+// Oracle requires the launch "username" to be EXACTLY 10 lowercase letters —
+// no digits, uppercase, or symbols. Digits were previously included here,
+// which meant almost every generated account was rejected by Oracle.
+const GAME_ACCOUNT_CHARS = 'abcdefghijklmnopqrstuvwxyz';
+const GAME_ACCOUNT_PATTERN = /^[a-z]{10}$/;
 const CATALOG_TTL_MS = 10 * 60 * 1000;
 const PROVIDER_FETCH_DELAY_MS = 300;
 const FEATURED_LOOKBACK_DAYS = 30;
@@ -81,7 +85,9 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
 
   private async ensureGameAccount(userId: bigint): Promise<string> {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
-    if (user.gameAccount) return user.gameAccount;
+    // Self-heal: a stored account from before the digit-charset fix would
+    // never validate against Oracle, so don't trust it blindly — regenerate.
+    if (user.gameAccount && GAME_ACCOUNT_PATTERN.test(user.gameAccount)) return user.gameAccount;
 
     for (;;) {
       const candidate = this.randomGameAccount();
