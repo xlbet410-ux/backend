@@ -19,6 +19,8 @@ const GAME_ACCOUNT_LENGTH = 10;
 const GAME_ACCOUNT_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
 const CATALOG_TTL_MS = 10 * 60 * 1000;
 const PROVIDER_FETCH_DELAY_MS = 300;
+const FEATURED_LOOKBACK_DAYS = 30;
+const FEATURED_LIMIT = 30;
 
 type CallbackPayload = {
   game_uid: string;
@@ -161,9 +163,35 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     return this.buildingPromise;
   }
 
+  /**
+   * "Featured" has no signal from Oracle — there's no "this game is popular"
+   * flag anywhere in their API. Instead of guessing at well-known titles,
+   * derive it from real play: the most-bet gameUids in GameTransaction over
+   * a recent window are actual evidence of what this platform's own
+   * Bangladeshi players are choosing, not an editorial guess. Naturally
+   * empty until enough real play accumulates — that's correct, not a bug.
+   */
+  private async getFeaturedGameUids(): Promise<Set<string>> {
+    const since = new Date(Date.now() - FEATURED_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+    const rows = await this.prisma.gameTransaction.groupBy({
+      by: ['gameUid'],
+      where: { createdAt: { gte: since } },
+      _count: { gameUid: true },
+      orderBy: { _count: { gameUid: 'desc' } },
+      take: FEATURED_LIMIT,
+    });
+    return new Set(rows.map((r) => r.gameUid));
+  }
+
   private async buildCatalog(): Promise<CatalogGame[]> {
     const started = Date.now();
-    const providers = (await this.getProviders()) as Array<{ code: string; name: string; status: number }>;
+    const [providers, featuredUids] = await Promise.all([
+      this.getProviders() as Promise<Array<{ code: string; name: string; status: number }>>,
+      this.getFeaturedGameUids().catch((err) => {
+        this.logger.warn(`Catalog build: couldn't compute featured games (${(err as Error).message})`);
+        return new Set<string>();
+      }),
+    ]);
     const active = Array.isArray(providers) ? providers.filter((p) => p.status === 1) : [];
 
     const out: CatalogGame[] = [];
@@ -187,6 +215,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
             providerCode: provider.code,
             providerName: provider.name,
             category: categorizeGame(g.category, provider.code, provider.name),
+            featured: featuredUids.has(g.game_uid),
             thumbnail: g.thumbnail,
             original: g.original,
           });
@@ -204,7 +233,10 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   async getCatalogCounts(): Promise<Record<GameCategory, number>> {
     const games = await this.ensureCatalog();
     const counts = Object.fromEntries(GAME_CATEGORIES.map((c) => [c, 0])) as Record<GameCategory, number>;
-    for (const g of games) counts[g.category]++;
+    for (const g of games) {
+      counts[g.category]++;
+      if (g.featured) counts.featured++;
+    }
     return counts;
   }
 
@@ -213,7 +245,8 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     page: number,
     pageSize: number,
   ): Promise<{ games: CatalogGame[]; total: number }> {
-    const all = (await this.ensureCatalog()).filter((g) => g.category === category);
+    const games = await this.ensureCatalog();
+    const all = category === 'featured' ? games.filter((g) => g.featured) : games.filter((g) => g.category === category);
     const start = (page - 1) * pageSize;
     return { games: all.slice(start, start + pageSize), total: all.length };
   }

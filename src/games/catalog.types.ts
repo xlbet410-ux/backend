@@ -1,24 +1,20 @@
 export type GameCategory =
+  | "featured"
   | "slots"
-  | "live-games"
-  | "sports"
-  | "esports"
-  | "mini-game"
-  | "fish-catch"
-  | "table-games"
-  | "arcade"
-  | "other";
+  | "live_casino"
+  | "cards"
+  | "fishing"
+  | "mini_games"
+  | "sports";
 
 export const GAME_CATEGORIES: GameCategory[] = [
+  "featured",
   "slots",
-  "live-games",
+  "live_casino",
+  "cards",
+  "fishing",
+  "mini_games",
   "sports",
-  "esports",
-  "mini-game",
-  "fish-catch",
-  "table-games",
-  "arcade",
-  "other",
 ];
 
 export type CatalogGame = {
@@ -27,6 +23,10 @@ export type CatalogGame = {
   providerCode: string;
   providerName: string;
   category: GameCategory;
+  // Whether this game is one of the platform's real most-played titles
+  // (computed from actual GameTransaction history, not a fixed value on
+  // the game itself) — used only to answer the "featured" category query.
+  featured: boolean;
   thumbnail: string;
   original: string;
 };
