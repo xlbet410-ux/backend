@@ -1,4 +1,14 @@
-import { GameCategory } from "./catalog.types";
+import { GameCategory, SubTag } from "./catalog.types";
+
+// A game only gets a sub-tag when its own name literally contains the word —
+// no guessing at mechanics we have no data for.
+export function computeSubTags(name: string): SubTag[] {
+  const key = name.toLowerCase();
+  const tags: SubTag[] = [];
+  if (key.includes("megaways")) tags.push("megaways");
+  if (key.includes("jackpot")) tags.push("jackpot");
+  return tags;
+}
 
 // Oracle tags every individual game with its own category (e.g. "Slot",
 // "Fish", "Crash", "Table"). Verified against live API responses by
@@ -220,4 +230,40 @@ export function categorizeGame(
     if (hit) return hit;
   }
   return categorizeProviderFallback(providerCode, providerName);
+}
+
+// Explicit curation: these exact titles are shown first, in this exact
+// order, in the Slots section, replicating a reference design the operator
+// asked to match. Two of these (Aviator, FlyX*) are Crash-mechanic games
+// that categorizeGame() would otherwise route to Mini Games — they're
+// deliberately pinned into Slots here, overriding the normal per-game
+// category for just these names, per that explicit request.
+export const PINNED_SLOTS_ORDER: string[] = [
+  "Super Ace",
+  "Aviator",
+  "Wild Bounty Showdown",
+  "Super Elements",
+  "Magic Ace WILD LOCK",
+  "Fortune Gems 3",
+  "Fortune Garuda 500",
+  "Fortune Gems 2",
+  "Boxing King",
+  "Super Ace Deluxe",
+  "Super Ace II",
+  "Money Coming",
+  "Treasures of Aztec",
+  "Anubis Wrath",
+  "Pinata Wins",
+  "Egypt Power x1000",
+  "Chinese New Year Moreways",
+  "Circus Joker 4096",
+  "FlyX",
+  "FlyX Cash Turbo",
+];
+
+const PINNED_SLOTS_LOOKUP = new Map(PINNED_SLOTS_ORDER.map((name, i) => [name.trim().toLowerCase(), i]));
+
+export function pinnedSlotsIndex(name: string): number | null {
+  const idx = PINNED_SLOTS_LOOKUP.get(name.trim().toLowerCase());
+  return idx === undefined ? null : idx;
 }

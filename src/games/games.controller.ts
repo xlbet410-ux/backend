@@ -2,7 +2,8 @@ import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Param, Post, Query
 import type { Request } from 'express';
 import { GamesService } from './games.service';
 import { LaunchGameDto } from './dto/launch-game.dto';
-import { GetCatalogQueryDto } from './dto/get-catalog.dto';
+import { GetCatalogQueryDto, GetSubTagCountsQueryDto } from './dto/get-catalog.dto';
+import { SearchCatalogQueryDto } from './dto/search-catalog.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller()
@@ -24,7 +25,17 @@ export class GamesController {
 
   @Get('games/catalog')
   getCatalog(@Query() query: GetCatalogQueryDto) {
-    return this.gamesService.getCatalogPage(query.category, query.page, query.pageSize);
+    return this.gamesService.getCatalogPage(query.category, query.page, query.pageSize, query.tag);
+  }
+
+  @Get('games/catalog/subtags')
+  getSubTagCounts(@Query() query: GetSubTagCountsQueryDto) {
+    return this.gamesService.getSubTagCounts(query.category);
+  }
+
+  @Get('games/catalog/search')
+  searchCatalog(@Query() query: SearchCatalogQueryDto) {
+    return this.gamesService.searchCatalog(query.q);
   }
 
   @Get('games/providers')

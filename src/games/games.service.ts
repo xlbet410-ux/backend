@@ -11,8 +11,8 @@ import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { CatalogGame, GAME_CATEGORIES, GameCategory } from './catalog.types';
-import { categorizeGame } from './category.util';
+import { CatalogGame, GAME_CATEGORIES, GameCategory, SUB_TAGS, SubTag } from './catalog.types';
+import { categorizeGame, computeSubTags, pinnedSlotsIndex } from './category.util';
 
 const ORACLE_BASE_URL_DEFAULT = 'https://oraclegames.net/api';
 const GAME_ACCOUNT_LENGTH = 10;
@@ -255,13 +255,18 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
         };
         for (const g of data.games ?? []) {
           if (g.status !== 1) continue;
+          // Pinned titles are forced into Slots regardless of their normal
+          // category — see the comment on PINNED_SLOTS_ORDER for why.
+          const category =
+            pinnedSlotsIndex(g.name) !== null ? 'slots' : categorizeGame(g.category, provider.code, provider.name);
           out.push({
             name: g.name,
             gameUid: g.game_uid,
             providerCode: provider.code,
             providerName: provider.name,
-            category: categorizeGame(g.category, provider.code, provider.name),
+            category,
             featured: featuredUids.has(g.game_uid),
+            subTags: computeSubTags(g.name),
             thumbnail: g.thumbnail,
             original: g.original,
           });
@@ -286,15 +291,43 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     return counts;
   }
 
+  async getSubTagCounts(category: GameCategory): Promise<Record<SubTag, number>> {
+    const games = await this.ensureCatalog();
+    const inCategory = category === 'featured' ? games.filter((g) => g.featured) : games.filter((g) => g.category === category);
+    const counts = Object.fromEntries(SUB_TAGS.map((t) => [t, 0])) as Record<SubTag, number>;
+    for (const g of inCategory) {
+      for (const tag of g.subTags) counts[tag]++;
+    }
+    return counts;
+  }
+
   async getCatalogPage(
     category: GameCategory,
     page: number,
     pageSize: number,
+    tag?: SubTag,
   ): Promise<{ games: CatalogGame[]; total: number }> {
     const games = await this.ensureCatalog();
-    const all = category === 'featured' ? games.filter((g) => g.featured) : games.filter((g) => g.category === category);
+    let all = category === 'featured' ? games.filter((g) => g.featured) : games.filter((g) => g.category === category);
+    if (tag) all = all.filter((g) => g.subTags.includes(tag));
+
+    if (category === 'slots') {
+      // Array.prototype.sort is stable (guaranteed since ES2019), so ties
+      // (everything not on the pinned list) keep their existing order.
+      all = [...all].sort((a, b) => (pinnedSlotsIndex(a.name) ?? Infinity) - (pinnedSlotsIndex(b.name) ?? Infinity));
+    }
+
     const start = (page - 1) * pageSize;
     return { games: all.slice(start, start + pageSize), total: all.length };
+  }
+
+  private static readonly SEARCH_RESULT_LIMIT = 30;
+
+  async searchCatalog(q: string): Promise<{ games: CatalogGame[]; total: number }> {
+    const games = await this.ensureCatalog();
+    const needle = q.trim().toLowerCase();
+    const matches = games.filter((g) => g.name.toLowerCase().includes(needle));
+    return { games: matches.slice(0, GamesService.SEARCH_RESULT_LIMIT), total: matches.length };
   }
 
   async handleCallback(payload: CallbackPayload) {

@@ -1,7 +1,7 @@
 import { Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, Max, Min } from 'class-validator';
-import { GAME_CATEGORIES } from '../catalog.types';
-import type { GameCategory } from '../catalog.types';
+import { GAME_CATEGORIES, SUB_TAGS } from '../catalog.types';
+import type { GameCategory, SubTag } from '../catalog.types';
 
 export class GetCatalogQueryDto {
   @IsEnum(GAME_CATEGORIES)
@@ -19,4 +19,13 @@ export class GetCatalogQueryDto {
   @Min(1)
   @Max(60)
   pageSize: number = 18;
+
+  @IsOptional()
+  @IsEnum(SUB_TAGS)
+  tag?: SubTag;
+}
+
+export class GetSubTagCountsQueryDto {
+  @IsEnum(GAME_CATEGORIES)
+  category: GameCategory;
 }
