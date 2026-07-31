@@ -258,40 +258,51 @@ export function categorizeGame(
   return categorizeProviderFallback(providerCode, providerName);
 }
 
-// Explicit curation: these exact titles are shown first, in this exact
-// order, in the Slots section, replicating a reference design the operator
-// asked to match. Two of these (Aviator, FlyX*) are Crash-mechanic games
-// that categorizeGame() would otherwise route to Mini Games — they're
-// deliberately pinned into Slots here, overriding the normal per-game
-// category for just these names, per that explicit request.
-export const PINNED_SLOTS_ORDER: string[] = [
-  'Super Ace',
-  'Aviator',
-  'Wild Bounty Showdown',
-  'Super Elements',
-  'Magic Ace WILD LOCK',
-  'Fortune Gems 3',
-  'Fortune Garuda 500',
-  'FlyX',
-  'Circus Joker 4096',
-  'Boxing King',
-  'Super Ace Deluxe',
-  'Super Ace II',
-  'Treasures of Aztec',
-  'Anubis Wrath',
-  'Money Coming',
-  'Fortune Gems 2',
-  'FlyX Cash Turbo',
-  'Pinata Wins',
-  'Egypt Power x1000',
-  'Chinese New Year Moreways',
+// Explicit curation: these exact (name, provider) pairs are shown first, in
+// this exact order, in the Slots section, replicating a reference design the
+// operator asked to match. Matching by name alone isn't enough — several
+// providers ship their own same-named clone (e.g. "Aviator", "Super Ace"
+// exist under multiple provider codes), which previously pinned every
+// provider's copy to the front instead of just the one intended. Two of
+// these (Aviator, FlyX*) are Crash-mechanic games that categorizeGame()
+// would otherwise route to Mini Games — they're deliberately pinned into
+// Slots here, overriding the normal per-game category for just this exact
+// (name, provider) pair.
+export const PINNED_SLOTS_ORDER: { name: string; providerCode: string }[] = [
+  { name: 'Super Ace', providerCode: 'JL' },
+  { name: 'Aviator', providerCode: 'SPRIBE' },
+  { name: 'Wild Bounty Showdown', providerCode: 'PG' },
+  { name: 'Super Elements', providerCode: 'FACHAI' },
+  { name: 'Magic Ace WILD LOCK', providerCode: 'JDB' },
+  { name: 'Fortune Gems 3', providerCode: 'JL' },
+  { name: 'Fortune Garuda 500', providerCode: 'JL' },
+  { name: 'FlyX', providerCode: 'MG' },
+  { name: 'Circus Joker 4096', providerCode: 'JL' },
+  { name: 'Boxing King', providerCode: 'JL' },
+  { name: 'Super Ace Deluxe', providerCode: 'JL' },
+  { name: 'Super Ace II', providerCode: 'JL' },
+  { name: 'Treasures of Aztec', providerCode: 'PG' },
+  { name: 'Anubis Wrath', providerCode: 'PG' },
+  { name: 'Money Coming', providerCode: 'JL' },
+  { name: 'Fortune Gems 2', providerCode: 'JL' },
+  { name: 'FlyX Cash Turbo', providerCode: 'MG' },
+  { name: 'Pinata Wins', providerCode: 'PG' },
+  { name: 'Egypt Power x1000', providerCode: 'BNG' },
+  { name: 'Chinese New Year Moreways', providerCode: 'FACHAI' },
 ];
 
+function pinKey(name: string, providerCode: string): string {
+  return `${providerCode.trim().toUpperCase()}::${name.trim().toLowerCase()}`;
+}
+
 const PINNED_SLOTS_LOOKUP = new Map(
-  PINNED_SLOTS_ORDER.map((name, i) => [name.trim().toLowerCase(), i]),
+  PINNED_SLOTS_ORDER.map((p, i) => [pinKey(p.name, p.providerCode), i]),
 );
 
-export function pinnedSlotsIndex(name: string): number | null {
-  const idx = PINNED_SLOTS_LOOKUP.get(name.trim().toLowerCase());
+export function pinnedSlotsIndex(
+  name: string,
+  providerCode: string,
+): number | null {
+  const idx = PINNED_SLOTS_LOOKUP.get(pinKey(name, providerCode));
   return idx === undefined ? null : idx;
 }

@@ -11,8 +11,18 @@ import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { CatalogGame, GAME_CATEGORIES, GameCategory, SUB_TAGS, SubTag } from './catalog.types';
-import { categorizeGame, computeSubTags, pinnedSlotsIndex } from './category.util';
+import {
+  CatalogGame,
+  GAME_CATEGORIES,
+  GameCategory,
+  SUB_TAGS,
+  SubTag,
+} from './catalog.types';
+import {
+  categorizeGame,
+  computeSubTags,
+  pinnedSlotsIndex,
+} from './category.util';
 
 const ORACLE_BASE_URL_DEFAULT = 'https://oraclegames.net/api';
 const GAME_ACCOUNT_LENGTH = 10;
@@ -41,7 +51,8 @@ type CallbackPayload = {
 export class GamesService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(GamesService.name);
 
-  private catalogCache: { games: CatalogGame[]; fetchedAt: number } | null = null;
+  private catalogCache: { games: CatalogGame[]; fetchedAt: number } | null =
+    null;
   private buildingPromise: Promise<CatalogGame[]> | null = null;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -63,13 +74,17 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   }
 
   private get baseUrl(): string {
-    return this.config.get<string>('ORACLE_BASE_URL') ?? ORACLE_BASE_URL_DEFAULT;
+    return (
+      this.config.get<string>('ORACLE_BASE_URL') ?? ORACLE_BASE_URL_DEFAULT
+    );
   }
 
   private get apiKey(): string {
     const key = this.config.get<string>('ORACLE_API_KEY');
     if (!key) {
-      throw new InternalServerErrorException('Game provider is not configured (missing ORACLE_API_KEY).');
+      throw new InternalServerErrorException(
+        'Game provider is not configured (missing ORACLE_API_KEY).',
+      );
     }
     return key;
   }
@@ -84,17 +99,25 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async ensureGameAccount(userId: bigint): Promise<string> {
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+    });
     // Self-heal: a stored account from before the digit-charset fix would
     // never validate against Oracle, so don't trust it blindly — regenerate.
-    if (user.gameAccount && GAME_ACCOUNT_PATTERN.test(user.gameAccount)) return user.gameAccount;
+    if (user.gameAccount && GAME_ACCOUNT_PATTERN.test(user.gameAccount))
+      return user.gameAccount;
 
     for (;;) {
       const candidate = this.randomGameAccount();
-      const existing = await this.prisma.user.findUnique({ where: { gameAccount: candidate } });
+      const existing = await this.prisma.user.findUnique({
+        where: { gameAccount: candidate },
+      });
       if (existing) continue;
 
-      await this.prisma.user.update({ where: { id: userId }, data: { gameAccount: candidate } });
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { gameAccount: candidate },
+      });
       return candidate;
     }
   }
@@ -126,10 +149,15 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     try {
       res = await fetch(`${this.baseUrl}/getgameurl`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-oracle-key': this.apiKey },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-oracle-key': this.apiKey,
+        },
         body: JSON.stringify(payload),
       });
-      data = (await res.json().catch(() => null)) as OracleLaunchResponse | null;
+      data = (await res
+        .json()
+        .catch(() => null)) as OracleLaunchResponse | null;
     } catch (err) {
       const e = err as Error;
       this.logger.error(
@@ -171,9 +199,12 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getProviderGames(providerCode: string) {
-    const res = await fetch(`${this.baseUrl}/manager/game/${encodeURIComponent(providerCode)}`, {
-      headers: { 'x-oracle-key': this.apiKey },
-    });
+    const res = await fetch(
+      `${this.baseUrl}/manager/game/${encodeURIComponent(providerCode)}`,
+      {
+        headers: { 'x-oracle-key': this.apiKey },
+      },
+    );
     if (!res.ok) {
       throw new BadRequestException("Couldn't load this provider's game list.");
     }
@@ -218,7 +249,9 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
    * empty until enough real play accumulates — that's correct, not a bug.
    */
   private async getFeaturedGameUids(): Promise<Set<string>> {
-    const since = new Date(Date.now() - FEATURED_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+    const since = new Date(
+      Date.now() - FEATURED_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+    );
     const rows = await this.prisma.gameTransaction.groupBy({
       by: ['gameUid'],
       where: { createdAt: { gte: since } },
@@ -232,13 +265,19 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   private async buildCatalog(): Promise<CatalogGame[]> {
     const started = Date.now();
     const [providers, featuredUids] = await Promise.all([
-      this.getProviders() as Promise<Array<{ code: string; name: string; status: number }>>,
+      this.getProviders() as Promise<
+        Array<{ code: string; name: string; status: number }>
+      >,
       this.getFeaturedGameUids().catch((err) => {
-        this.logger.warn(`Catalog build: couldn't compute featured games (${(err as Error).message})`);
+        this.logger.warn(
+          `Catalog build: couldn't compute featured games (${(err as Error).message})`,
+        );
         return new Set<string>();
       }),
     ]);
-    const active = Array.isArray(providers) ? providers.filter((p) => p.status === 1) : [];
+    const active = Array.isArray(providers)
+      ? providers.filter((p) => p.status === 1)
+      : [];
 
     const out: CatalogGame[] = [];
     for (const provider of active) {
@@ -258,7 +297,9 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
           // Pinned titles are forced into Slots regardless of their normal
           // category — see the comment on PINNED_SLOTS_ORDER for why.
           const category =
-            pinnedSlotsIndex(g.name) !== null ? 'slots' : categorizeGame(g.category, provider.code, provider.name);
+            pinnedSlotsIndex(g.name, provider.code) !== null
+              ? 'slots'
+              : categorizeGame(g.category, provider.code, provider.name);
           out.push({
             name: g.name,
             gameUid: g.game_uid,
@@ -272,18 +313,24 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
           });
         }
       } catch (err) {
-        this.logger.warn(`Catalog build: skipping provider ${provider.code} (${(err as Error).message})`);
+        this.logger.warn(
+          `Catalog build: skipping provider ${provider.code} (${(err as Error).message})`,
+        );
       }
       await new Promise((r) => setTimeout(r, PROVIDER_FETCH_DELAY_MS));
     }
 
-    this.logger.log(`Catalog build finished: ${out.length} games from ${active.length} providers in ${Date.now() - started}ms`);
+    this.logger.log(
+      `Catalog build finished: ${out.length} games from ${active.length} providers in ${Date.now() - started}ms`,
+    );
     return out;
   }
 
   async getCatalogCounts(): Promise<Record<GameCategory, number>> {
     const games = await this.ensureCatalog();
-    const counts = Object.fromEntries(GAME_CATEGORIES.map((c) => [c, 0])) as Record<GameCategory, number>;
+    const counts = Object.fromEntries(
+      GAME_CATEGORIES.map((c) => [c, 0]),
+    ) as Record<GameCategory, number>;
     for (const g of games) {
       counts[g.category]++;
       if (g.featured) counts.featured++;
@@ -291,10 +338,18 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     return counts;
   }
 
-  async getSubTagCounts(category: GameCategory): Promise<Record<SubTag, number>> {
+  async getSubTagCounts(
+    category: GameCategory,
+  ): Promise<Record<SubTag, number>> {
     const games = await this.ensureCatalog();
-    const inCategory = category === 'featured' ? games.filter((g) => g.featured) : games.filter((g) => g.category === category);
-    const counts = Object.fromEntries(SUB_TAGS.map((t) => [t, 0])) as Record<SubTag, number>;
+    const inCategory =
+      category === 'featured'
+        ? games.filter((g) => g.featured)
+        : games.filter((g) => g.category === category);
+    const counts = Object.fromEntries(SUB_TAGS.map((t) => [t, 0])) as Record<
+      SubTag,
+      number
+    >;
     for (const g of inCategory) {
       for (const tag of g.subTags) counts[tag]++;
     }
@@ -308,13 +363,20 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     tag?: SubTag,
   ): Promise<{ games: CatalogGame[]; total: number }> {
     const games = await this.ensureCatalog();
-    let all = category === 'featured' ? games.filter((g) => g.featured) : games.filter((g) => g.category === category);
+    let all =
+      category === 'featured'
+        ? games.filter((g) => g.featured)
+        : games.filter((g) => g.category === category);
     if (tag) all = all.filter((g) => g.subTags.includes(tag));
 
     if (category === 'slots') {
       // Array.prototype.sort is stable (guaranteed since ES2019), so ties
       // (everything not on the pinned list) keep their existing order.
-      all = [...all].sort((a, b) => (pinnedSlotsIndex(a.name) ?? Infinity) - (pinnedSlotsIndex(b.name) ?? Infinity));
+      all = [...all].sort(
+        (a, b) =>
+          (pinnedSlotsIndex(a.name, a.providerCode) ?? Infinity) -
+          (pinnedSlotsIndex(b.name, b.providerCode) ?? Infinity),
+      );
     }
 
     const start = (page - 1) * pageSize;
@@ -323,34 +385,61 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
 
   private static readonly SEARCH_RESULT_LIMIT = 30;
 
-  async searchCatalog(q: string): Promise<{ games: CatalogGame[]; total: number }> {
+  async searchCatalog(
+    q: string,
+  ): Promise<{ games: CatalogGame[]; total: number }> {
     const games = await this.ensureCatalog();
     const needle = q.trim().toLowerCase();
     const matches = games.filter((g) => g.name.toLowerCase().includes(needle));
-    return { games: matches.slice(0, GamesService.SEARCH_RESULT_LIMIT), total: matches.length };
+    return {
+      games: matches.slice(0, GamesService.SEARCH_RESULT_LIMIT),
+      total: matches.length,
+    };
   }
 
   async handleCallback(payload: CallbackPayload) {
-    const { member_account, serial_number, bet_amount, win_amount, game_uid, game_round, currency_code } = payload;
+    const {
+      member_account,
+      serial_number,
+      bet_amount,
+      win_amount,
+      game_uid,
+      game_round,
+      currency_code,
+    } = payload;
     if (!member_account || !serial_number) {
-      throw new BadRequestException('member_account and serial_number are required.');
+      throw new BadRequestException(
+        'member_account and serial_number are required.',
+      );
     }
 
     // Idempotency: a retried callback with the same serial_number must not be applied twice.
-    const existing = await this.prisma.gameTransaction.findUnique({ where: { serialNumber: serial_number } });
+    const existing = await this.prisma.gameTransaction.findUnique({
+      where: { serialNumber: serial_number },
+    });
     if (existing) {
       return { balance: Number(existing.balanceAfter) };
     }
 
     try {
       const balanceAfter = await this.prisma.$transaction(async (tx) => {
-        const user = await tx.user.findUnique({ where: { gameAccount: member_account } });
+        const user = await tx.user.findUnique({
+          where: { gameAccount: member_account },
+        });
         if (!user) {
-          throw new NotFoundException(`No user found for member_account ${member_account}.`);
+          throw new NotFoundException(
+            `No user found for member_account ${member_account}.`,
+          );
         }
 
-        const newBalance = Number(user.balance) - Number(bet_amount || 0) + Number(win_amount || 0);
-        await tx.user.update({ where: { id: user.id }, data: { balance: newBalance } });
+        const newBalance =
+          Number(user.balance) -
+          Number(bet_amount || 0) +
+          Number(win_amount || 0);
+        await tx.user.update({
+          where: { id: user.id },
+          data: { balance: newBalance },
+        });
         await tx.gameTransaction.create({
           data: {
             userId: user.id,
@@ -369,8 +458,13 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     } catch (err) {
       // Two concurrent retries can both pass the findUnique check above before either
       // commits; the serial_number unique constraint catches that race here instead.
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        const row = await this.prisma.gameTransaction.findUnique({ where: { serialNumber: serial_number } });
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const row = await this.prisma.gameTransaction.findUnique({
+          where: { serialNumber: serial_number },
+        });
         if (row) return { balance: Number(row.balanceAfter) };
       }
       throw err;
