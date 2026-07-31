@@ -17,12 +17,32 @@ export const GAME_CATEGORIES: GameCategory[] = [
   "sports",
 ];
 
-// Real, verifiable sub-tags only — a game gets one of these solely when its
-// own name contains the word. There is no Oracle data for reel count,
-// Megaways/Bonus-Buy mechanics, or feature flags, so this list intentionally
-// stays small rather than guessing.
-export type SubTag = "megaways" | "jackpot";
-export const SUB_TAGS: SubTag[] = ["megaways", "jackpot"];
+// Real, verifiable sub-tags only. "megaways"/"jackpot" come from a literal
+// name match (Oracle has no mechanic-flag data); the rest come straight from
+// Oracle's own per-game raw category, so they only ever appear on games in
+// the category that raw value already maps to — e.g. table_games/video_poker
+// only show up within Cards, crash_games/arcade/bingo/scratches only within
+// Mini Games. There's no data for reel count, Bonus Buy, Free Spins, Respins,
+// Cascade Slots, or Cricket-as-a-slot-feature, so those aren't included.
+export type SubTag =
+  | "megaways"
+  | "jackpot"
+  | "table_games"
+  | "video_poker"
+  | "crash_games"
+  | "arcade"
+  | "bingo"
+  | "scratches";
+export const SUB_TAGS: SubTag[] = [
+  "megaways",
+  "jackpot",
+  "table_games",
+  "video_poker",
+  "crash_games",
+  "arcade",
+  "bingo",
+  "scratches",
+];
 
 export type CatalogGame = {
   name: string;

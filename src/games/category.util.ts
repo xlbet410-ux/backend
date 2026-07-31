@@ -1,12 +1,32 @@
 import { GameCategory, SubTag } from "./catalog.types";
 
-// A game only gets a sub-tag when its own name literally contains the word —
-// no guessing at mechanics we have no data for.
-export function computeSubTags(name: string): SubTag[] {
+const RAW_CATEGORY_TO_SUB_TAG: Record<string, SubTag> = {
+  Table: "table_games",
+  Card: "table_games",
+  Casino: "table_games",
+  Roulette: "table_games",
+  BlackJack: "table_games",
+  Baccarat: "table_games",
+  "Hundred-player": "table_games",
+  Poker: "video_poker",
+  Crash: "crash_games",
+  Arcade: "arcade",
+  Bingo: "bingo",
+  Scratch: "scratches",
+  "Scratch cards": "scratches",
+};
+
+// A game only gets a sub-tag when there's real, verifiable evidence for it:
+// either its own name literally contains the word (Megaways/Jackpot — Oracle
+// has no mechanic-flag data to check instead), or Oracle's own raw category
+// for that game maps to one directly. No guessing.
+export function computeSubTags(name: string, rawCategory: string | null | undefined): SubTag[] {
   const key = name.toLowerCase();
   const tags: SubTag[] = [];
   if (key.includes("megaways")) tags.push("megaways");
   if (key.includes("jackpot")) tags.push("jackpot");
+  const fromRaw = rawCategory ? RAW_CATEGORY_TO_SUB_TAG[rawCategory.trim()] : undefined;
+  if (fromRaw) tags.push(fromRaw);
   return tags;
 }
 

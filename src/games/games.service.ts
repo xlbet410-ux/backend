@@ -266,7 +266,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
             providerName: provider.name,
             category,
             featured: featuredUids.has(g.game_uid),
-            subTags: computeSubTags(g.name),
+            subTags: computeSubTags(g.name, g.category),
             thumbnail: g.thumbnail,
             original: g.original,
           });
