@@ -106,18 +106,58 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       this.ensureGameAccount(id),
     ]);
 
-    const res = await fetch(`${this.baseUrl}/getgameurl`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-oracle-key': this.apiKey },
-      body: JSON.stringify({ username: gameAccount, amount: Number(user.balance), game_uid: gameUid }),
-    });
-    const data = await res.json().catch(() => null);
-
-    if (!res.ok || !data?.status) {
-      this.logger.error(`getgameurl failed for user ${userId}: ${JSON.stringify(data)}`);
-      throw new BadRequestException(data?.message ?? "Couldn't launch this game right now.");
+    const amount = Number(user.balance);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('Please deposit funds before playing.');
     }
-    return { gameUrl: data.game_url as string };
+
+    const payload = { username: gameAccount, amount, game_uid: gameUid };
+    const isDev = process.env.NODE_ENV !== 'production';
+
+    type OracleLaunchResponse = {
+      status?: boolean;
+      success?: boolean;
+      game_url?: string;
+      launch_url?: string;
+      message?: string;
+    };
+    let res: Response;
+    let data: OracleLaunchResponse | null = null;
+    try {
+      res = await fetch(`${this.baseUrl}/getgameurl`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-oracle-key': this.apiKey },
+        body: JSON.stringify(payload),
+      });
+      data = (await res.json().catch(() => null)) as OracleLaunchResponse | null;
+    } catch (err) {
+      const e = err as Error;
+      this.logger.error(
+        `getgameurl request errored for user ${userId}. Request: ${JSON.stringify(payload)} ` +
+          `Error: ${e.message}\n${e.stack}`,
+      );
+      throw new BadRequestException({
+        message: "Couldn't launch this game right now.",
+        ...(isDev ? { oracleResponse: { error: e.message } } : {}),
+      });
+    }
+
+    // Accept either field name Oracle might use for "did this work" and "where do I send the player" -
+    // the documented contract is status/game_url, but be lenient in case a provider varies it.
+    const isSuccess = data?.success === true || data?.status === true;
+    const gameUrl = data?.launch_url || data?.game_url;
+
+    if (!res.ok || !isSuccess || !gameUrl) {
+      this.logger.error(
+        `getgameurl failed for user ${userId}. Request: ${JSON.stringify(payload)} ` +
+          `Response (${res.status}): ${JSON.stringify(data)}`,
+      );
+      throw new BadRequestException({
+        message: data?.message ?? "Couldn't launch this game right now.",
+        ...(isDev ? { oracleResponse: data } : {}),
+      });
+    }
+    return { gameUrl };
   }
 
   async getProviders() {
