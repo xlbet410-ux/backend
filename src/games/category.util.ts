@@ -78,9 +78,38 @@ const RAW_CATEGORY_MAP: Record<string, GameCategory> = {
   Multiplayer: 'mini_games',
 
   Sports: 'sports',
-  Esports: 'sports',
+  Esports: 'esports',
   Cockfighting: 'sports',
   Animal: 'sports',
+};
+
+// Explicit provider-level split for the sportsbook aggregators. Oracle tags
+// most of a sportsbook provider's own games generically "Sports" regardless
+// of what the provider actually specializes in, so raw category can't tell
+// CyberBetX (esports-focused) or Betby (both) apart from the plain
+// sportsbooks — this overrides both the raw category and
+// CODE_CATEGORY_FALLBACK above for exactly these codes. 'both' duplicates
+// the game into both category lists (same gameUid, two entries) rather than
+// picking one.
+export const SPORTS_ESPORTS_PROVIDER_OVERRIDE: Record<
+  string,
+  'sports' | 'esports' | 'both'
+> = {
+  SABA: 'sports',
+  UG: 'sports',
+  BTI: 'sports',
+  LUCKSPORT: 'sports',
+  SBO: 'sports',
+  CMD: 'sports',
+  DP: 'sports',
+  BETBY: 'both',
+  TOPBET: 'sports',
+  VPLUS: 'sports',
+  WYNSOSPORTS: 'sports',
+  PSG: 'sports',
+  RECTANGLE: 'sports',
+  CYBERBETX: 'esports',
+  KOOLBET: 'sports',
 };
 
 // Fallback only for games with a missing/unrecognized category — e.g.

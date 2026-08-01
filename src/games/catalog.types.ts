@@ -1,20 +1,22 @@
 export type GameCategory =
-  | "featured"
-  | "slots"
-  | "live_casino"
-  | "cards"
-  | "fishing"
-  | "mini_games"
-  | "sports";
+  | 'featured'
+  | 'slots'
+  | 'live_casino'
+  | 'cards'
+  | 'fishing'
+  | 'mini_games'
+  | 'sports'
+  | 'esports';
 
 export const GAME_CATEGORIES: GameCategory[] = [
-  "featured",
-  "slots",
-  "live_casino",
-  "cards",
-  "fishing",
-  "mini_games",
-  "sports",
+  'featured',
+  'slots',
+  'live_casino',
+  'cards',
+  'fishing',
+  'mini_games',
+  'sports',
+  'esports',
 ];
 
 // Real, verifiable sub-tags only. "megaways"/"jackpot" come from a literal
@@ -25,23 +27,23 @@ export const GAME_CATEGORIES: GameCategory[] = [
 // Mini Games. There's no data for reel count, Bonus Buy, Free Spins, Respins,
 // Cascade Slots, or Cricket-as-a-slot-feature, so those aren't included.
 export type SubTag =
-  | "megaways"
-  | "jackpot"
-  | "table_games"
-  | "video_poker"
-  | "crash_games"
-  | "arcade"
-  | "bingo"
-  | "scratches";
+  | 'megaways'
+  | 'jackpot'
+  | 'table_games'
+  | 'video_poker'
+  | 'crash_games'
+  | 'arcade'
+  | 'bingo'
+  | 'scratches';
 export const SUB_TAGS: SubTag[] = [
-  "megaways",
-  "jackpot",
-  "table_games",
-  "video_poker",
-  "crash_games",
-  "arcade",
-  "bingo",
-  "scratches",
+  'megaways',
+  'jackpot',
+  'table_games',
+  'video_poker',
+  'crash_games',
+  'arcade',
+  'bingo',
+  'scratches',
 ];
 
 export type CatalogGame = {

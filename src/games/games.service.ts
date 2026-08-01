@@ -25,6 +25,7 @@ import {
   pinnedLiveCasinoIndex,
   pinnedFishingIndex,
   pinnedCardsIndex,
+  SPORTS_ESPORTS_PROVIDER_OVERRIDE,
 } from './category.util';
 
 const ORACLE_BASE_URL_DEFAULT = 'https://oraclegames.net/api';
@@ -295,28 +296,39 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
             status: number;
           }>;
         };
+        const sportsEsportsOverride =
+          SPORTS_ESPORTS_PROVIDER_OVERRIDE[provider.code.trim().toUpperCase()];
         for (const g of data.games ?? []) {
           if (g.status !== 1) continue;
-          // Pinned titles are forced into Slots/Cards regardless of their
-          // normal category — see the comments on PINNED_SLOTS_ORDER and
-          // PINNED_CARDS_ORDER for why.
-          const category =
-            pinnedSlotsIndex(g.name, provider.code) !== null
-              ? 'slots'
-              : pinnedCardsIndex(g.name, provider.code) !== null
-                ? 'cards'
-                : categorizeGame(g.category, provider.code, provider.name);
-          out.push({
-            name: g.name,
-            gameUid: g.game_uid,
-            providerCode: provider.code,
-            providerName: provider.name,
-            category,
-            featured: featuredUids.has(g.game_uid),
-            subTags: computeSubTags(g.name, g.category),
-            thumbnail: g.thumbnail,
-            original: g.original,
-          });
+          // Sportsbook aggregators are split by provider (see the comment on
+          // SPORTS_ESPORTS_PROVIDER_OVERRIDE), overriding even the raw
+          // category. Otherwise, pinned titles are forced into Slots/Cards
+          // regardless of their normal category — see the comments on
+          // PINNED_SLOTS_ORDER and PINNED_CARDS_ORDER for why.
+          const categories: GameCategory[] = sportsEsportsOverride
+            ? sportsEsportsOverride === 'both'
+              ? ['sports', 'esports']
+              : [sportsEsportsOverride]
+            : [
+                pinnedSlotsIndex(g.name, provider.code) !== null
+                  ? 'slots'
+                  : pinnedCardsIndex(g.name, provider.code) !== null
+                    ? 'cards'
+                    : categorizeGame(g.category, provider.code, provider.name),
+              ];
+          for (const category of categories) {
+            out.push({
+              name: g.name,
+              gameUid: g.game_uid,
+              providerCode: provider.code,
+              providerName: provider.name,
+              category,
+              featured: featuredUids.has(g.game_uid),
+              subTags: computeSubTags(g.name, g.category),
+              thumbnail: g.thumbnail,
+              original: g.original,
+            });
+          }
         }
       } catch (err) {
         this.logger.warn(
