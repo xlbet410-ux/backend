@@ -411,6 +411,93 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     return { games: all.slice(start, start + pageSize), total: all.length };
   }
 
+  // Providers that have at least one game within a given category — powers
+  // the header's per-section dropdown (real providers, not curated cards).
+  async getCategoryProviders(
+    category: GameCategory,
+  ): Promise<{ code: string; name: string; count: number }[]> {
+    const games = await this.ensureCatalog();
+    const inCategory =
+      category === 'featured'
+        ? games.filter((g) => g.featured)
+        : games.filter((g) => g.category === category);
+    return this.groupByProvider(inCategory);
+  }
+
+  // Every provider with at least one active game, across all categories —
+  // powers the sidebar on a provider's own catalog page.
+  async getAllProviders(): Promise<
+    { code: string; name: string; count: number }[]
+  > {
+    const games = await this.ensureCatalog();
+    return this.groupByProvider(games);
+  }
+
+  private groupByProvider(
+    games: CatalogGame[],
+  ): { code: string; name: string; count: number }[] {
+    // A game can appear twice in the flat catalog if it's pinned into both
+    // Sports and Esports (see SPORTS_ESPORTS_PROVIDER_OVERRIDE 'both') —
+    // dedupe by gameUid so it isn't double-counted here.
+    const seen = new Set<string>();
+    const map = new Map<
+      string,
+      { code: string; name: string; count: number }
+    >();
+    for (const g of games) {
+      if (seen.has(g.gameUid)) continue;
+      seen.add(g.gameUid);
+      const existing = map.get(g.providerCode);
+      if (existing) existing.count++;
+      else
+        map.set(g.providerCode, {
+          code: g.providerCode,
+          name: g.providerName,
+          count: 1,
+        });
+    }
+    return [...map.values()].sort(
+      (a, b) => b.count - a.count || a.name.localeCompare(b.name),
+    );
+  }
+
+  async getProviderCatalog(
+    providerCode: string,
+    page: number,
+    pageSize: number,
+    sort: 'name_asc' | 'name_desc' | 'featured' = 'name_asc',
+  ): Promise<{ games: CatalogGame[]; total: number; providerName: string }> {
+    const games = await this.ensureCatalog();
+    const code = providerCode.trim().toUpperCase();
+    // Same gameUid dedupe as groupByProvider — this page shows a provider's
+    // games regardless of category, so a 'both' pin shouldn't show twice.
+    const seen = new Set<string>();
+    const all: CatalogGame[] = [];
+    for (const g of games) {
+      if (g.providerCode.trim().toUpperCase() !== code) continue;
+      if (seen.has(g.gameUid)) continue;
+      seen.add(g.gameUid);
+      all.push(g);
+    }
+    const providerName = all[0]?.providerName ?? providerCode;
+    const sorted = [...all].sort((a, b) => {
+      if (sort === 'name_desc') return b.name.localeCompare(a.name);
+      if (sort === 'featured') {
+        return (
+          Number(b.featured) - Number(a.featured) ||
+          a.name.localeCompare(b.name)
+        );
+      }
+      return a.name.localeCompare(b.name);
+    });
+    const start = (page - 1) * pageSize;
+    return {
+      games: sorted.slice(start, start + pageSize),
+      total: sorted.length,
+      providerName,
+    };
+  }
+
   private static readonly SEARCH_RESULT_LIMIT = 30;
 
   async searchCatalog(
