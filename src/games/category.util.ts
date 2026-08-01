@@ -306,3 +306,92 @@ export function pinnedSlotsIndex(
   const idx = PINNED_SLOTS_LOOKUP.get(pinKey(name, providerCode));
   return idx === undefined ? null : idx;
 }
+
+// Same idea as PINNED_SLOTS_ORDER, for Live Casino and Fishing — these
+// don't need a category override (the raw Oracle category already puts
+// them in the right bucket), just the display order. Some entries list
+// more than one providerCode because the operator's reference list named
+// a studio (e.g. "Evolution") that Oracle exposes under multiple regional
+// codes for the same game; the pin matches whichever one is actually live.
+export const PINNED_LIVE_CASINO_ORDER: {
+  name: string;
+  providerCodes: string[];
+}[] = [
+  { name: 'Crazy Time', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'Funky Time', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'Ice Fishing', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'Mega Wheel', providerCodes: ['PPLIVE'] },
+  { name: 'Bac Bo', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'Auto-Roulette', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'Crazy Time A', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'Fan Tan', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'Super Sic Bo', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'Sweet Bonanza Candyland', providerCodes: ['PPLIVE'] },
+  { name: 'Monopoly Big Baller', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'BACCARAT C08', providerCodes: ['SEXY'] },
+  { name: 'Lightning Storm', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'Crazy Balls', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'Red Door Roulette', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'Bac Bo Ao Vivo', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'Lightning Dice', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'Lightning Roulette', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'Monopoly Live', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+  { name: 'Speed Baccarat A', providerCodes: ['EVOASIA', 'EVOLIVEROW'] },
+];
+
+export const PINNED_FISHING_ORDER: {
+  name: string;
+  providerCodes: string[];
+}[] = [
+  { name: 'Fortune King Jackpot', providerCodes: ['JL'] },
+  { name: 'Happy Fishing', providerCodes: ['JL'] },
+  { name: 'Jackpot Fishing', providerCodes: ['JL'] },
+  { name: 'Jackpot Fishing 2', providerCodes: ['JL'] },
+  { name: 'Ocean King Jackpot', providerCodes: ['JL'] },
+  { name: 'Mega Fishing', providerCodes: ['JL'] },
+  { name: 'Circus Jackpot', providerCodes: ['JL'] },
+  { name: 'Gods Grant Fortune', providerCodes: ['FACHAI'] },
+  { name: 'FORTUNE ZOMBIE', providerCodes: ['JL'] },
+  { name: 'Bombing Fishing', providerCodes: ['JL'] },
+  { name: 'Dinosaur Tycoon', providerCodes: ['JL'] },
+  { name: 'Royal Fishing', providerCodes: ['JL'] },
+  { name: 'Star Hunter', providerCodes: ['FACHAI'] },
+  { name: 'Dinosaur Tycoon II', providerCodes: ['JL'] },
+  { name: 'All-Star Fishing', providerCodes: ['JL'] },
+  { name: 'Boom Legend', providerCodes: ['JL'] },
+  { name: 'Dragon Fishing', providerCodes: ['JDB'] },
+  { name: 'Cai Shen Fishing', providerCodes: ['JDB'] },
+  { name: 'Monkey King Fishing', providerCodes: ['FACHAI'] },
+  { name: 'Fa Chai Fishing', providerCodes: ['FACHAI'] },
+];
+
+function buildPinnedLookup(
+  entries: { name: string; providerCodes: string[] }[],
+): Map<string, number> {
+  const lookup = new Map<string, number>();
+  entries.forEach((entry, i) => {
+    for (const code of entry.providerCodes) {
+      lookup.set(pinKey(entry.name, code), i);
+    }
+  });
+  return lookup;
+}
+
+const PINNED_LIVE_CASINO_LOOKUP = buildPinnedLookup(PINNED_LIVE_CASINO_ORDER);
+const PINNED_FISHING_LOOKUP = buildPinnedLookup(PINNED_FISHING_ORDER);
+
+export function pinnedLiveCasinoIndex(
+  name: string,
+  providerCode: string,
+): number | null {
+  const idx = PINNED_LIVE_CASINO_LOOKUP.get(pinKey(name, providerCode));
+  return idx === undefined ? null : idx;
+}
+
+export function pinnedFishingIndex(
+  name: string,
+  providerCode: string,
+): number | null {
+  const idx = PINNED_FISHING_LOOKUP.get(pinKey(name, providerCode));
+  return idx === undefined ? null : idx;
+}

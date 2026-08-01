@@ -22,6 +22,8 @@ import {
   categorizeGame,
   computeSubTags,
   pinnedSlotsIndex,
+  pinnedLiveCasinoIndex,
+  pinnedFishingIndex,
 } from './category.util';
 
 const ORACLE_BASE_URL_DEFAULT = 'https://oraclegames.net/api';
@@ -369,13 +371,22 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
         : games.filter((g) => g.category === category);
     if (tag) all = all.filter((g) => g.subTags.includes(tag));
 
-    if (category === 'slots') {
-      // Array.prototype.sort is stable (guaranteed since ES2019), so ties
-      // (everything not on the pinned list) keep their existing order.
+    // Array.prototype.sort is stable (guaranteed since ES2019), so ties
+    // (everything not on the pinned list) keep their existing order.
+    const pinnedIndexFor: Record<
+      string,
+      ((name: string, providerCode: string) => number | null) | undefined
+    > = {
+      slots: pinnedSlotsIndex,
+      live_casino: pinnedLiveCasinoIndex,
+      fishing: pinnedFishingIndex,
+    };
+    const pinnedIndex = pinnedIndexFor[category];
+    if (pinnedIndex) {
       all = [...all].sort(
         (a, b) =>
-          (pinnedSlotsIndex(a.name, a.providerCode) ?? Infinity) -
-          (pinnedSlotsIndex(b.name, b.providerCode) ?? Infinity),
+          (pinnedIndex(a.name, a.providerCode) ?? Infinity) -
+          (pinnedIndex(b.name, b.providerCode) ?? Infinity),
       );
     }
 
