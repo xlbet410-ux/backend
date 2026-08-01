@@ -365,6 +365,38 @@ export const PINNED_FISHING_ORDER: {
   { name: 'Fa Chai Fishing', providerCodes: ['FACHAI'] },
 ];
 
+// Cards/Poker — all 20 are KingMaker/King Midas instant-table titles that
+// share the one KM provider code. Several of these (Sic Bo, Dice Duel,
+// Color Game, Hi-Lo, Coin Toss) are the kind of thing Oracle's own raw
+// category could plausibly file under Instant/Casual (Mini Games) instead
+// of Table/Casino — pinned here forces them into Cards regardless, same
+// reasoning as the Aviator/FlyX override on PINNED_SLOTS_ORDER above.
+export const PINNED_CARDS_ORDER: {
+  name: string;
+  providerCodes: string[];
+}[] = [
+  { name: '7 Up 7 Down', providerCodes: ['KM'] },
+  { name: 'Coin Toss', providerCodes: ['KM'] },
+  { name: 'Sic Bo', providerCodes: ['KM'] },
+  { name: 'Poker Roulette', providerCodes: ['KM'] },
+  { name: 'Dice Duel', providerCodes: ['KM'] },
+  { name: 'Tai Xiu', providerCodes: ['KM'] },
+  { name: '7 Up 7 Down Rush', providerCodes: ['KM'] },
+  { name: 'Andar Bahar', providerCodes: ['KM'] },
+  { name: 'Thai Fish Prawn Crab', providerCodes: ['KM'] },
+  { name: '32 Cards', providerCodes: ['KM'] },
+  { name: 'Triple Chance', providerCodes: ['KM'] },
+  { name: 'Speedy Andar Bahar', providerCodes: ['KM'] },
+  { name: 'Thai Hi Lo 2', providerCodes: ['KM'] },
+  { name: 'Fish Prawn Crab 2', providerCodes: ['KM'] },
+  { name: 'Burmese 6 Animals', providerCodes: ['KM'] },
+  { name: 'Color Game', providerCodes: ['KM'] },
+  { name: 'Vietnam Fish Prawn Crab', providerCodes: ['KM'] },
+  { name: 'Dota Hi-Lo', providerCodes: ['KM'] },
+  { name: 'Jogo De Bozo', providerCodes: ['KM'] },
+  { name: 'European Roulette', providerCodes: ['KM'] },
+];
+
 function buildPinnedLookup(
   entries: { name: string; providerCodes: string[] }[],
 ): Map<string, number> {
@@ -379,12 +411,21 @@ function buildPinnedLookup(
 
 const PINNED_LIVE_CASINO_LOOKUP = buildPinnedLookup(PINNED_LIVE_CASINO_ORDER);
 const PINNED_FISHING_LOOKUP = buildPinnedLookup(PINNED_FISHING_ORDER);
+const PINNED_CARDS_LOOKUP = buildPinnedLookup(PINNED_CARDS_ORDER);
 
 export function pinnedLiveCasinoIndex(
   name: string,
   providerCode: string,
 ): number | null {
   const idx = PINNED_LIVE_CASINO_LOOKUP.get(pinKey(name, providerCode));
+  return idx === undefined ? null : idx;
+}
+
+export function pinnedCardsIndex(
+  name: string,
+  providerCode: string,
+): number | null {
+  const idx = PINNED_CARDS_LOOKUP.get(pinKey(name, providerCode));
   return idx === undefined ? null : idx;
 }
 

@@ -24,6 +24,7 @@ import {
   pinnedSlotsIndex,
   pinnedLiveCasinoIndex,
   pinnedFishingIndex,
+  pinnedCardsIndex,
 } from './category.util';
 
 const ORACLE_BASE_URL_DEFAULT = 'https://oraclegames.net/api';
@@ -296,12 +297,15 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
         };
         for (const g of data.games ?? []) {
           if (g.status !== 1) continue;
-          // Pinned titles are forced into Slots regardless of their normal
-          // category — see the comment on PINNED_SLOTS_ORDER for why.
+          // Pinned titles are forced into Slots/Cards regardless of their
+          // normal category — see the comments on PINNED_SLOTS_ORDER and
+          // PINNED_CARDS_ORDER for why.
           const category =
             pinnedSlotsIndex(g.name, provider.code) !== null
               ? 'slots'
-              : categorizeGame(g.category, provider.code, provider.name);
+              : pinnedCardsIndex(g.name, provider.code) !== null
+                ? 'cards'
+                : categorizeGame(g.category, provider.code, provider.name);
           out.push({
             name: g.name,
             gameUid: g.game_uid,
@@ -380,6 +384,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       slots: pinnedSlotsIndex,
       live_casino: pinnedLiveCasinoIndex,
       fishing: pinnedFishingIndex,
+      cards: pinnedCardsIndex,
     };
     const pinnedIndex = pinnedIndexFor[category];
     if (pinnedIndex) {
