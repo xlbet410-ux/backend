@@ -1,5 +1,6 @@
 export type GameCategory =
   | 'featured'
+  | 'hot_games'
   | 'slots'
   | 'live_casino'
   | 'cards'
@@ -10,6 +11,7 @@ export type GameCategory =
 
 export const GAME_CATEGORIES: GameCategory[] = [
   'featured',
+  'hot_games',
   'slots',
   'live_casino',
   'cards',
@@ -56,6 +58,10 @@ export type CatalogGame = {
   // (computed from actual GameTransaction history, not a fixed value on
   // the game itself) — used only to answer the "featured" category query.
   featured: boolean;
+  // Explicit operator curation (see PINNED_HOT_GAMES_ORDER) — same
+  // boolean-flag pattern as `featured`, answering the "hot_games" category
+  // query without needing a second copy of the game in the flat list.
+  hotGames: boolean;
   subTags: SubTag[];
   thumbnail: string;
   original: string;

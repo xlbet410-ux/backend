@@ -25,6 +25,7 @@ import {
   pinnedLiveCasinoIndex,
   pinnedFishingIndex,
   pinnedCardsIndex,
+  pinnedHotGamesIndex,
   SPORTS_ESPORTS_PROVIDER_OVERRIDE,
 } from './category.util';
 
@@ -324,6 +325,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
               providerName: provider.name,
               category,
               featured: featuredUids.has(g.game_uid),
+              hotGames: pinnedHotGamesIndex(g.name, provider.code) !== null,
               subTags: computeSubTags(g.name, g.category),
               thumbnail: g.thumbnail,
               original: g.original,
@@ -352,6 +354,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     for (const g of games) {
       counts[g.category]++;
       if (g.featured) counts.featured++;
+      if (g.hotGames) counts.hot_games++;
     }
     return counts;
   }
@@ -363,7 +366,9 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     const inCategory =
       category === 'featured'
         ? games.filter((g) => g.featured)
-        : games.filter((g) => g.category === category);
+        : category === 'hot_games'
+          ? games.filter((g) => g.hotGames)
+          : games.filter((g) => g.category === category);
     const counts = Object.fromEntries(SUB_TAGS.map((t) => [t, 0])) as Record<
       SubTag,
       number
@@ -384,7 +389,9 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     let all =
       category === 'featured'
         ? games.filter((g) => g.featured)
-        : games.filter((g) => g.category === category);
+        : category === 'hot_games'
+          ? games.filter((g) => g.hotGames)
+          : games.filter((g) => g.category === category);
     if (tag) all = all.filter((g) => g.subTags.includes(tag));
 
     // Array.prototype.sort is stable (guaranteed since ES2019), so ties
@@ -397,6 +404,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       live_casino: pinnedLiveCasinoIndex,
       fishing: pinnedFishingIndex,
       cards: pinnedCardsIndex,
+      hot_games: pinnedHotGamesIndex,
     };
     const pinnedIndex = pinnedIndexFor[category];
     if (pinnedIndex) {
@@ -420,7 +428,9 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     const inCategory =
       category === 'featured'
         ? games.filter((g) => g.featured)
-        : games.filter((g) => g.category === category);
+        : category === 'hot_games'
+          ? games.filter((g) => g.hotGames)
+          : games.filter((g) => g.category === category);
     return this.groupByProvider(inCategory);
   }
 
