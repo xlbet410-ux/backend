@@ -567,3 +567,41 @@ export function pinnedFishingIndex(
   const idx = PINNED_FISHING_LOOKUP.get(pinKey(name, providerCode));
   return idx === undefined ? null : idx;
 }
+
+// Explicit operator-supplied display order for the Sports section — every
+// game from SABA shows first, then every UG game, then BTI, and so on, one
+// provider block at a time (games within a provider keep their existing
+// relative order, since sort is stable). Same set of codes as
+// SPORTS_ESPORTS_PROVIDER_OVERRIDE above; this only controls ordering, not
+// which category a game lands in.
+export const SPORTS_PROVIDER_ORDER: string[] = [
+  'SABA',
+  'UG',
+  'BTI',
+  'LUCKSPORT',
+  'SBO',
+  'CMD',
+  'DP',
+  'BETBY',
+  'TOPBET',
+  'VPLUS',
+  'WYNSOSPORTS',
+  'PSG',
+  'RECTANGLE',
+  'CYBERBETX',
+  'KOOLBET',
+];
+
+const SPORTS_PROVIDER_ORDER_LOOKUP = new Map(
+  SPORTS_PROVIDER_ORDER.map((code, i) => [code.trim().toUpperCase(), i]),
+);
+
+export function sportsProviderOrderIndex(
+  _name: string,
+  providerCode: string,
+): number | null {
+  const idx = SPORTS_PROVIDER_ORDER_LOOKUP.get(
+    providerCode.trim().toUpperCase(),
+  );
+  return idx === undefined ? null : idx;
+}

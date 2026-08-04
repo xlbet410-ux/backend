@@ -26,6 +26,7 @@ import {
   pinnedFishingIndex,
   pinnedCardsIndex,
   pinnedHotGamesIndex,
+  sportsProviderOrderIndex,
   SPORTS_ESPORTS_PROVIDER_OVERRIDE,
 } from './category.util';
 
@@ -405,6 +406,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       fishing: pinnedFishingIndex,
       cards: pinnedCardsIndex,
       hot_games: pinnedHotGamesIndex,
+      sports: sportsProviderOrderIndex,
     };
     const pinnedIndex = pinnedIndexFor[category];
     if (pinnedIndex) {
