@@ -47,6 +47,8 @@ export class GamesController {
       query.page,
       query.pageSize,
       query.tag,
+      query.providerCode,
+      query.sort,
     );
   }
 

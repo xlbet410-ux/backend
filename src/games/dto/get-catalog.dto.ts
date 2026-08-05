@@ -1,7 +1,10 @@
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { GAME_CATEGORIES, SUB_TAGS } from '../catalog.types';
 import type { GameCategory, SubTag } from '../catalog.types';
+
+const CATALOG_SORTS = ['name_asc', 'name_desc', 'featured'] as const;
+export type CatalogSort = (typeof CATALOG_SORTS)[number];
 
 export class GetCatalogQueryDto {
   @IsEnum(GAME_CATEGORIES)
@@ -23,6 +26,14 @@ export class GetCatalogQueryDto {
   @IsOptional()
   @IsEnum(SUB_TAGS)
   tag?: SubTag;
+
+  @IsOptional()
+  @IsString()
+  providerCode?: string;
+
+  @IsOptional()
+  @IsEnum(CATALOG_SORTS)
+  sort?: CatalogSort;
 }
 
 export class GetSubTagCountsQueryDto {

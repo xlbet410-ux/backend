@@ -385,6 +385,8 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     page: number,
     pageSize: number,
     tag?: SubTag,
+    providerCode?: string,
+    sort?: 'name_asc' | 'name_desc' | 'featured',
   ): Promise<{ games: CatalogGame[]; total: number }> {
     const games = await this.ensureCatalog();
     let all =
@@ -394,27 +396,47 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
           ? games.filter((g) => g.hotGames)
           : games.filter((g) => g.category === category);
     if (tag) all = all.filter((g) => g.subTags.includes(tag));
+    if (providerCode) {
+      const code = providerCode.trim().toUpperCase();
+      all = all.filter((g) => g.providerCode.trim().toUpperCase() === code);
+    }
 
-    // Array.prototype.sort is stable (guaranteed since ES2019), so ties
-    // (everything not on the pinned list) keep their existing order.
-    const pinnedIndexFor: Record<
-      string,
-      ((name: string, providerCode: string) => number | null) | undefined
-    > = {
-      slots: pinnedSlotsIndex,
-      live_casino: pinnedLiveCasinoIndex,
-      fishing: pinnedFishingIndex,
-      cards: pinnedCardsIndex,
-      hot_games: pinnedHotGamesIndex,
-      sports: sportsProviderOrderIndex,
-    };
-    const pinnedIndex = pinnedIndexFor[category];
-    if (pinnedIndex) {
-      all = [...all].sort(
-        (a, b) =>
-          (pinnedIndex(a.name, a.providerCode) ?? Infinity) -
-          (pinnedIndex(b.name, b.providerCode) ?? Infinity),
-      );
+    if (sort) {
+      // Explicit sort (the category browse page) overrides the curated
+      // pinned order below — an operator-picked order and a user-picked
+      // A-Z/featured sort don't both apply at once.
+      all = [...all].sort((a, b) => {
+        if (sort === 'name_desc') return b.name.localeCompare(a.name);
+        if (sort === 'featured') {
+          return (
+            Number(b.featured) - Number(a.featured) ||
+            a.name.localeCompare(b.name)
+          );
+        }
+        return a.name.localeCompare(b.name);
+      });
+    } else {
+      // Array.prototype.sort is stable (guaranteed since ES2019), so ties
+      // (everything not on the pinned list) keep their existing order.
+      const pinnedIndexFor: Record<
+        string,
+        ((name: string, providerCode: string) => number | null) | undefined
+      > = {
+        slots: pinnedSlotsIndex,
+        live_casino: pinnedLiveCasinoIndex,
+        fishing: pinnedFishingIndex,
+        cards: pinnedCardsIndex,
+        hot_games: pinnedHotGamesIndex,
+        sports: sportsProviderOrderIndex,
+      };
+      const pinnedIndex = pinnedIndexFor[category];
+      if (pinnedIndex) {
+        all = [...all].sort(
+          (a, b) =>
+            (pinnedIndex(a.name, a.providerCode) ?? Infinity) -
+            (pinnedIndex(b.name, b.providerCode) ?? Infinity),
+        );
+      }
     }
 
     const start = (page - 1) * pageSize;
