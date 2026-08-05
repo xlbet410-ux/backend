@@ -308,9 +308,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
           // regardless of their normal category — see the comments on
           // PINNED_SLOTS_ORDER and PINNED_CARDS_ORDER for why.
           const categories: GameCategory[] = sportsEsportsOverride
-            ? sportsEsportsOverride === 'both'
-              ? ['sports', 'esports']
-              : [sportsEsportsOverride]
+            ? [sportsEsportsOverride]
             : [
                 pinnedSlotsIndex(g.name, provider.code) !== null
                   ? 'slots'
@@ -470,9 +468,8 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   private groupByProvider(
     games: CatalogGame[],
   ): { code: string; name: string; count: number }[] {
-    // A game can appear twice in the flat catalog if it's pinned into both
-    // Sports and Esports (see SPORTS_ESPORTS_PROVIDER_OVERRIDE 'both') —
-    // dedupe by gameUid so it isn't double-counted here.
+    // Defensive dedupe by gameUid, in case a future category rule ever
+    // produces more than one entry per game in the flat catalog.
     const seen = new Set<string>();
     const map = new Map<
       string,
@@ -503,8 +500,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   ): Promise<{ games: CatalogGame[]; total: number; providerName: string }> {
     const games = await this.ensureCatalog();
     const code = providerCode.trim().toUpperCase();
-    // Same gameUid dedupe as groupByProvider — this page shows a provider's
-    // games regardless of category, so a 'both' pin shouldn't show twice.
+    // Same defensive gameUid dedupe as groupByProvider.
     const seen = new Set<string>();
     const all: CatalogGame[] = [];
     for (const g of games) {

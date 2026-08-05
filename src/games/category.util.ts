@@ -79,43 +79,41 @@ const RAW_CATEGORY_MAP: Record<string, GameCategory> = {
 
   Sports: 'sports',
   Esports: 'esports',
-  // Cockfighting/animal-fighting games route to EA Sports (a catch-all for
-  // the niche/regional betting products), not the main Sports section.
-  Cockfighting: 'ea_sports',
-  Animal: 'ea_sports',
+  // Cockfighting/animal-fighting games route to the Esports bucket (a
+  // catch-all for niche/regional betting products), not Live Sports.
+  Cockfighting: 'esports',
+  Animal: 'esports',
 };
 
 // Explicit provider-level split for the sportsbook aggregators. Oracle tags
 // most of a sportsbook provider's own games generically "Sports" regardless
 // of what the provider actually specializes in, so raw category can't tell
-// CyberBetX (esports-focused) or Betby (both) apart from the plain
-// sportsbooks — this overrides both the raw category and
-// CODE_CATEGORY_FALLBACK above for exactly these codes. 'both' duplicates
-// the game into both category lists (same gameUid, two entries) rather than
-// picking one.
+// these apart from the mainstream sportsbooks — this overrides both the raw
+// category and CODE_CATEGORY_FALLBACK above for exactly these codes.
 //
 // Live Sports (`sports`) is kept to just the operator-picked mainstream
 // sportsbooks — everything else that used to land in Sports (regional
-// books, horse-racing-heavy providers like TOPBET, and the rest) moves to
-// `ea_sports` instead, a catch-all "other sports" section.
+// books, horse-racing-heavy providers like TOPBET, CyberBetX, and the
+// rest) is folded into `esports` instead, a single catch-all "everything
+// else" section (no more separate EA Sports tab).
 export const SPORTS_ESPORTS_PROVIDER_OVERRIDE: Record<
   string,
-  'sports' | 'esports' | 'ea_sports' | 'both'
+  'sports' | 'esports'
 > = {
   SABA: 'sports',
   UG: 'sports',
   BTI: 'sports',
   SBO: 'sports',
-  BETBY: 'both',
-  LUCKSPORT: 'ea_sports',
-  CMD: 'ea_sports',
-  DP: 'ea_sports',
-  TOPBET: 'ea_sports',
-  VPLUS: 'ea_sports',
-  WYNSOSPORTS: 'ea_sports',
-  PSG: 'ea_sports',
-  RECTANGLE: 'ea_sports',
-  KOOLBET: 'ea_sports',
+  BETBY: 'sports',
+  LUCKSPORT: 'esports',
+  CMD: 'esports',
+  DP: 'esports',
+  TOPBET: 'esports',
+  VPLUS: 'esports',
+  WYNSOSPORTS: 'esports',
+  PSG: 'esports',
+  RECTANGLE: 'esports',
+  KOOLBET: 'esports',
   CYBERBETX: 'esports',
 };
 
@@ -184,7 +182,7 @@ const CODE_CATEGORY_FALLBACK: Record<string, GameCategory> = {
   ASTAR: 'sports',
   TF: 'sports',
   DPES: 'sports',
-  AOG: 'ea_sports', // cockfighting — verified via real game names (e.g. "COCKFIGHT03")
+  AOG: 'esports', // cockfighting — verified via real game names (e.g. "COCKFIGHT03")
 
   // ---------- SLOTS (default for game studios) ----------
   PG: 'slots',

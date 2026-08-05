@@ -7,7 +7,6 @@ export type GameCategory =
   | 'fishing'
   | 'mini_games'
   | 'sports'
-  | 'ea_sports'
   | 'esports';
 
 export const GAME_CATEGORIES: GameCategory[] = [
@@ -19,7 +18,6 @@ export const GAME_CATEGORIES: GameCategory[] = [
   'fishing',
   'mini_games',
   'sports',
-  'ea_sports',
   'esports',
 ];
 
