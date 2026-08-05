@@ -79,8 +79,10 @@ const RAW_CATEGORY_MAP: Record<string, GameCategory> = {
 
   Sports: 'sports',
   Esports: 'esports',
-  Cockfighting: 'sports',
-  Animal: 'sports',
+  // Cockfighting/animal-fighting games route to EA Sports (a catch-all for
+  // the niche/regional betting products), not the main Sports section.
+  Cockfighting: 'ea_sports',
+  Animal: 'ea_sports',
 };
 
 // Explicit provider-level split for the sportsbook aggregators. Oracle tags
@@ -91,25 +93,30 @@ const RAW_CATEGORY_MAP: Record<string, GameCategory> = {
 // CODE_CATEGORY_FALLBACK above for exactly these codes. 'both' duplicates
 // the game into both category lists (same gameUid, two entries) rather than
 // picking one.
+//
+// Live Sports (`sports`) is kept to just the operator-picked mainstream
+// sportsbooks — everything else that used to land in Sports (regional
+// books, horse-racing-heavy providers like TOPBET, and the rest) moves to
+// `ea_sports` instead, a catch-all "other sports" section.
 export const SPORTS_ESPORTS_PROVIDER_OVERRIDE: Record<
   string,
-  'sports' | 'esports' | 'both'
+  'sports' | 'esports' | 'ea_sports' | 'both'
 > = {
   SABA: 'sports',
   UG: 'sports',
   BTI: 'sports',
-  LUCKSPORT: 'sports',
   SBO: 'sports',
-  CMD: 'sports',
-  DP: 'sports',
   BETBY: 'both',
-  TOPBET: 'sports',
-  VPLUS: 'sports',
-  WYNSOSPORTS: 'sports',
-  PSG: 'sports',
-  RECTANGLE: 'sports',
+  LUCKSPORT: 'ea_sports',
+  CMD: 'ea_sports',
+  DP: 'ea_sports',
+  TOPBET: 'ea_sports',
+  VPLUS: 'ea_sports',
+  WYNSOSPORTS: 'ea_sports',
+  PSG: 'ea_sports',
+  RECTANGLE: 'ea_sports',
+  KOOLBET: 'ea_sports',
   CYBERBETX: 'esports',
-  KOOLBET: 'sports',
 };
 
 // Fallback only for games with a missing/unrecognized category — e.g.
@@ -177,7 +184,7 @@ const CODE_CATEGORY_FALLBACK: Record<string, GameCategory> = {
   ASTAR: 'sports',
   TF: 'sports',
   DPES: 'sports',
-  AOG: 'sports', // cockfighting — verified via real game names (e.g. "COCKFIGHT03")
+  AOG: 'ea_sports', // cockfighting — verified via real game names (e.g. "COCKFIGHT03")
 
   // ---------- SLOTS (default for game studios) ----------
   PG: 'slots',
@@ -524,28 +531,18 @@ export function pinnedFishingIndex(
   return idx === undefined ? null : idx;
 }
 
-// Explicit operator-supplied display order for the Sports section — every
-// game from SABA shows first, then every UG game, then BTI, and so on, one
-// provider block at a time (games within a provider keep their existing
-// relative order, since sort is stable). Same set of codes as
-// SPORTS_ESPORTS_PROVIDER_OVERRIDE above; this only controls ordering, not
-// which category a game lands in.
+// Explicit operator-supplied display order for the (now narrowed) Sports
+// section — every game from SABA shows first, then every UG game, then BTI,
+// and so on, one provider block at a time (games within a provider keep
+// their existing relative order, since sort is stable). Matches the 5
+// providers still routed to `sports` in SPORTS_ESPORTS_PROVIDER_OVERRIDE;
+// this only controls ordering, not which category a game lands in.
 export const SPORTS_PROVIDER_ORDER: string[] = [
   'SABA',
   'UG',
   'BTI',
-  'LUCKSPORT',
   'SBO',
-  'CMD',
-  'DP',
   'BETBY',
-  'TOPBET',
-  'VPLUS',
-  'WYNSOSPORTS',
-  'PSG',
-  'RECTANGLE',
-  'CYBERBETX',
-  'KOOLBET',
 ];
 
 const SPORTS_PROVIDER_ORDER_LOOKUP = new Map(
