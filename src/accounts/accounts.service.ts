@@ -1,8 +1,15 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { AccountLoginDto } from './dto/login.dto';
+import { ChangeAccountPasswordDto } from './dto/change-password.dto';
 
 const SALT_ROUNDS = 10;
 
@@ -24,24 +31,32 @@ export class AccountsService {
       username: account.username,
       roleId: account.roleId.toString(),
       roleName: account.role.name,
-      percentage: account.percentage === null ? null : Number(account.percentage),
+      percentage:
+        account.percentage === null ? null : Number(account.percentage),
       isActive: account.isActive,
       createdAt: account.createdAt.toISOString(),
     };
   }
 
   async findAll() {
-    const accounts = await this.prisma.account.findMany({ include: { role: true }, orderBy: { id: 'asc' } });
+    const accounts = await this.prisma.account.findMany({
+      include: { role: true },
+      orderBy: { id: 'asc' },
+    });
     return accounts.map((a) => this.toPublic(a));
   }
 
   async create(dto: CreateAccountDto) {
-    const existing = await this.prisma.account.findUnique({ where: { username: dto.username } });
+    const existing = await this.prisma.account.findUnique({
+      where: { username: dto.username },
+    });
     if (existing) {
       throw new ConflictException('Username already exists.');
     }
 
-    const role = await this.prisma.role.findUnique({ where: { id: BigInt(dto.roleId) } });
+    const role = await this.prisma.role.findUnique({
+      where: { id: BigInt(dto.roleId) },
+    });
     if (!role) {
       throw new BadRequestException('Select a valid role.');
     }
@@ -59,16 +74,23 @@ export class AccountsService {
   }
 
   async setActive(id: string, isActive: boolean) {
-    const account = await this.prisma.account.findUnique({ where: { id: BigInt(id) } });
+    const account = await this.prisma.account.findUnique({
+      where: { id: BigInt(id) },
+    });
     if (!account) {
       throw new NotFoundException('Account not found.');
     }
-    await this.prisma.account.update({ where: { id: account.id }, data: { isActive } });
+    await this.prisma.account.update({
+      where: { id: account.id },
+      data: { isActive },
+    });
     return { success: true };
   }
 
   async remove(id: string) {
-    const account = await this.prisma.account.findUnique({ where: { id: BigInt(id) } });
+    const account = await this.prisma.account.findUnique({
+      where: { id: BigInt(id) },
+    });
     if (!account) {
       throw new NotFoundException('Account not found.');
     }
@@ -91,15 +113,39 @@ export class AccountsService {
     }
 
     if (!account.isActive) {
-      throw new UnauthorizedException('This account has been deactivated. Contact an admin.');
+      throw new UnauthorizedException(
+        'This account has been deactivated. Contact an admin.',
+      );
     }
 
     return {
       username: account.username,
       roleName: account.role.name,
       canApprove: account.role.canApprove,
-      percentage: account.percentage === null ? null : Number(account.percentage),
+      percentage:
+        account.percentage === null ? null : Number(account.percentage),
       pages: account.role.pages.map((p) => p.pagePath),
     };
+  }
+
+  async changePassword(dto: ChangeAccountPasswordDto) {
+    const account = await this.prisma.account.findUnique({
+      where: { username: dto.username },
+    });
+    if (!account) {
+      throw new UnauthorizedException();
+    }
+
+    const matches = await bcrypt.compare(dto.oldPassword, account.passwordHash);
+    if (!matches) {
+      throw new UnauthorizedException('Current password is incorrect.');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.newPassword, SALT_ROUNDS);
+    await this.prisma.account.update({
+      where: { id: account.id },
+      data: { passwordHash },
+    });
+    return { success: true };
   }
 }

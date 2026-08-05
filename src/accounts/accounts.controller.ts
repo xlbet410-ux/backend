@@ -1,8 +1,20 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { AccountsService } from './accounts.service';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { AccountLoginDto } from './dto/login.dto';
 import { SetActiveDto } from './dto/set-active.dto';
+import { ChangeAccountPasswordDto } from './dto/change-password.dto';
 import { ApiKeyGuard } from '../common/guards/api-key.guard';
 
 @UseGuards(ApiKeyGuard)
@@ -23,6 +35,11 @@ export class AccountsController {
   @Patch(':id/active')
   setActive(@Param('id') id: string, @Body() dto: SetActiveDto) {
     return this.accountsService.setActive(id, dto.isActive);
+  }
+
+  @Patch('change-password')
+  changePassword(@Body() dto: ChangeAccountPasswordDto) {
+    return this.accountsService.changePassword(dto);
   }
 
   @Delete(':id')
