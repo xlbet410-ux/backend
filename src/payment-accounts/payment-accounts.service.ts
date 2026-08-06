@@ -35,6 +35,14 @@ export class PaymentAccountsService {
     return accounts.map((a) => this.toPublic(a));
   }
 
+  async findAllActive() {
+    const accounts = await this.prisma.paymentAccount.findMany({
+      where: { isActive: true },
+      orderBy: [{ method: 'asc' }, { createdAt: 'asc' }],
+    });
+    return accounts.map((a) => this.toPublic(a));
+  }
+
   async create(dto: CreatePaymentAccountDto) {
     const account = await this.prisma.paymentAccount.create({
       data: {
