@@ -5,6 +5,7 @@ export const PAYMENT_METHODS = [
   'nagad',
   'rocket',
   'upay',
+  'surecash',
   'crypto',
   'bank',
 ] as const;
