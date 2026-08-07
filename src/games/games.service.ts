@@ -239,6 +239,18 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
         this.catalogCache = { games, fetchedAt: Date.now() };
         return games;
       })
+      .catch((err) => {
+        // This is called fire-and-forget from onModuleInit and the refresh
+        // interval (no caller awaits or catches it) — an unhandled Oracle
+        // network failure here (timeout, DNS, etc.) would otherwise crash
+        // the entire process, taking down every unrelated route with it.
+        // Fall back to whatever's cached instead: stale data on a warm
+        // refresh, or an empty catalog on a cold start.
+        this.logger.error(
+          `Catalog build failed, keeping ${this.catalogCache ? 'stale' : 'empty'} catalog: ${(err as Error).message}`,
+        );
+        return this.catalogCache?.games ?? [];
+      })
       .finally(() => {
         this.buildingPromise = null;
       });
