@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { PaymentAccountsService } from './payment-accounts.service';
 import { CreatePaymentAccountDto } from './dto/create-payment-account.dto';
+import { UpdatePaymentAccountDto } from './dto/update-payment-account.dto';
 import { SetActiveDto } from './dto/set-active.dto';
 import { ApiKeyGuard } from '../common/guards/api-key.guard';
 
@@ -36,6 +37,12 @@ export class PaymentAccountsController {
   @Post()
   create(@Body() dto: CreatePaymentAccountDto) {
     return this.paymentAccountsService.create(dto);
+  }
+
+  @UseGuards(ApiKeyGuard)
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() dto: UpdatePaymentAccountDto) {
+    return this.paymentAccountsService.update(id, dto);
   }
 
   @UseGuards(ApiKeyGuard)

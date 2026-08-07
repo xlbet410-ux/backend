@@ -1,5 +1,5 @@
 import {
-  IsIn,
+  IsBoolean,
   IsNumber,
   IsOptional,
   IsString,
@@ -8,27 +8,16 @@ import {
   MinLength,
 } from 'class-validator';
 
-export const PAYMENT_METHODS = [
-  'bkash',
-  'nagad',
-  'rocket',
-  'upay',
-  'surecash',
-  'crypto',
-  'bank',
-] as const;
-
-export class CreatePaymentAccountDto {
-  @IsIn(PAYMENT_METHODS)
-  method: string;
-
+export class UpdatePaymentAccountDto {
+  @IsOptional()
   @IsString()
   @MinLength(2)
-  label: string;
+  label?: string;
 
+  @IsOptional()
   @IsString()
   @MinLength(3)
-  accountNumber: string;
+  accountNumber?: string;
 
   @IsOptional()
   @IsString()
@@ -38,6 +27,8 @@ export class CreatePaymentAccountDto {
   @IsString()
   details?: string;
 
+  // Omit to leave the current password unchanged — only ever hashed and
+  // overwritten when a new value is actually provided.
   @IsOptional()
   @IsString()
   @MinLength(4)
@@ -63,4 +54,8 @@ export class CreatePaymentAccountDto {
   @IsNumber()
   @Min(0)
   monthlyCollect?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
 }
