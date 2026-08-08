@@ -24,12 +24,16 @@ model User {
   agreedTerms     Boolean  @default(false) @map("agreed_terms")
   balance         Decimal  @default(0) @db.Decimal(14, 2)
   gameAccount     String?  @unique @map("game_account") @db.VarChar(10)
+  // Admin-controlled kill switch, independent of KYC status — see
+  // CashTransaction for how this and KYC together gate withdrawals.
+  isActive        Boolean  @default(true) @map("is_active")
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz
 
   conversations    Conversation[]
   kycVerification  KycVerification?
   gameTransactions GameTransaction[]
+  cashTransactions CashTransaction[]
 
   @@map("users")
 }
@@ -81,9 +85,10 @@ model Account {
 
   role Role @relation(fields: [roleId], references: [id])
 
-  assignedConversations Conversation[]
-  sentMessages          Message[]
-  reviewedKyc           KycVerification[]
+  assignedConversations    Conversation[]
+  sentMessages             Message[]
+  reviewedKyc              KycVerification[]
+  reviewedCashTransactions CashTransaction[]
 
   @@map("accounts")
 }
@@ -137,6 +142,28 @@ model KycVerification {
   reviewer Account? @relation(fields: [reviewedBy], references: [id], onDelete: SetNull)
 
   @@map("kyc_verifications")
+}
+
+model CashTransaction {
+  id         BigInt    @id @default(autoincrement())
+  userId     BigInt    @map("user_id")
+  // 'cash_in' (deposit) or 'cash_out' (withdrawal)
+  type       String    @db.VarChar(10)
+  method     String    @db.VarChar(20)
+  amount     Decimal   @db.Decimal(14, 2)
+  // Transaction ID the player supplied for a cash-in, or the destination
+  // account number they gave for a cash-out.
+  reference  String?   @db.VarChar(150)
+  status     String    @default("pending") @db.VarChar(20)
+  reviewedBy BigInt?   @map("reviewed_by")
+  reviewedAt DateTime? @map("reviewed_at") @db.Timestamptz
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime  @default(now()) @map("updated_at") @db.Timestamptz
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewer Account? @relation(fields: [reviewedBy], references: [id], onDelete: SetNull)
+
+  @@map("cash_transactions")
 }
 
 model SliderImage {

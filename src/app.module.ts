@@ -15,6 +15,7 @@ import { KycModule } from './kyc/kyc.module';
 import { PromoImagesModule } from './promo-images/promo-images.module';
 import { GamesModule } from './games/games.module';
 import { PaymentAccountsModule } from './payment-accounts/payment-accounts.module';
+import { TransactionsModule } from './transactions/transactions.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { PaymentAccountsModule } from './payment-accounts/payment-accounts.modul
     PromoImagesModule,
     GamesModule,
     PaymentAccountsModule,
+    TransactionsModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
