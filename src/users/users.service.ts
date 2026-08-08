@@ -25,6 +25,7 @@ export class UsersService {
       }
       return {
         id: u.id.toString(),
+        memberId: u.memberId,
         fullName: u.fullName,
         phoneNumber: u.phoneNumber,
         referralCode: u.referralCode,

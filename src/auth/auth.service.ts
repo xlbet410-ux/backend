@@ -1,4 +1,8 @@
-import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { Prisma } from '../../generated/prisma/client';
@@ -19,7 +23,20 @@ export class AuthService {
   private async generateOwnReferralCode(): Promise<string> {
     for (;;) {
       const code = Math.random().toString(36).slice(2, 8).toUpperCase();
-      const existing = await this.prisma.user.findUnique({ where: { ownReferralCode: code } });
+      const existing = await this.prisma.user.findUnique({
+        where: { ownReferralCode: code },
+      });
+      if (!existing) return code;
+    }
+  }
+
+  private async generateMemberId(): Promise<string> {
+    for (;;) {
+      const digits = Math.floor(100000 + Math.random() * 900000);
+      const code = `2XL-${digits}`;
+      const existing = await this.prisma.user.findUnique({
+        where: { memberId: code },
+      });
       if (!existing) return code;
     }
   }
@@ -29,6 +46,7 @@ export class AuthService {
     fullName: string;
     phoneNumber: string;
     ownReferralCode: string | null;
+    memberId: string;
     balance: Prisma.Decimal;
   }) {
     return {
@@ -36,18 +54,22 @@ export class AuthService {
       name: user.fullName,
       phone: user.phoneNumber,
       referralCode: user.ownReferralCode,
+      memberId: user.memberId,
       balance: `৳${Number(user.balance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
     };
   }
 
   async register(dto: RegisterDto) {
-    const existing = await this.prisma.user.findUnique({ where: { phoneNumber: dto.phoneNumber } });
+    const existing = await this.prisma.user.findUnique({
+      where: { phoneNumber: dto.phoneNumber },
+    });
     if (existing) {
       throw new ConflictException('This phone number is already registered.');
     }
 
     const passwordHash = await bcrypt.hash(dto.password, SALT_ROUNDS);
     const ownReferralCode = await this.generateOwnReferralCode();
+    const memberId = await this.generateMemberId();
 
     const user = await this.prisma.user.create({
       data: {
@@ -56,32 +78,46 @@ export class AuthService {
         passwordHash,
         referralCode: dto.referralCode || null,
         ownReferralCode,
+        memberId,
         isAdult: dto.isAdult ?? dto.agreedTerms,
         agreedTerms: dto.agreedTerms,
       },
     });
 
-    const token = await this.jwt.signAsync({ sub: user.id.toString(), phone: user.phoneNumber });
+    const token = await this.jwt.signAsync({
+      sub: user.id.toString(),
+      phone: user.phoneNumber,
+    });
     return { token, user: this.toPublicUser(user) };
   }
 
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findUnique({ where: { phoneNumber: dto.phoneNumber } });
+    const user = await this.prisma.user.findUnique({
+      where: { phoneNumber: dto.phoneNumber },
+    });
     if (!user) {
       throw new UnauthorizedException('Invalid phone number or password.');
     }
 
-    const passwordMatches = await bcrypt.compare(dto.password, user.passwordHash);
+    const passwordMatches = await bcrypt.compare(
+      dto.password,
+      user.passwordHash,
+    );
     if (!passwordMatches) {
       throw new UnauthorizedException('Invalid phone number or password.');
     }
 
-    const token = await this.jwt.signAsync({ sub: user.id.toString(), phone: user.phoneNumber });
+    const token = await this.jwt.signAsync({
+      sub: user.id.toString(),
+      phone: user.phoneNumber,
+    });
     return { token, user: this.toPublicUser(user) };
   }
 
   async me(userId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: BigInt(userId) } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: BigInt(userId) },
+    });
     if (!user) {
       throw new UnauthorizedException();
     }
@@ -89,7 +125,9 @@ export class AuthService {
   }
 
   async changePassword(userId: string, dto: ChangePasswordDto) {
-    const user = await this.prisma.user.findUnique({ where: { id: BigInt(userId) } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: BigInt(userId) },
+    });
     if (!user) {
       throw new UnauthorizedException();
     }
@@ -100,7 +138,10 @@ export class AuthService {
     }
 
     const passwordHash = await bcrypt.hash(dto.newPassword, SALT_ROUNDS);
-    await this.prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash },
+    });
     return { success: true };
   }
 }

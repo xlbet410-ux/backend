@@ -24,6 +24,9 @@ model User {
   agreedTerms     Boolean  @default(false) @map("agreed_terms")
   balance         Decimal  @default(0) @db.Decimal(14, 2)
   gameAccount     String?  @unique @map("game_account") @db.VarChar(10)
+  // Player-facing display ID (e.g. "2XL-361773"), assigned once at
+  // registration — shown on the bet site profile and searchable in the CRM.
+  memberId        String   @unique @map("member_id") @db.VarChar(20)
   // Admin-controlled kill switch, independent of KYC status — see
   // CashTransaction for how this and KYC together gate withdrawals.
   isActive        Boolean  @default(true) @map("is_active")
