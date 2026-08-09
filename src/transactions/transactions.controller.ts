@@ -38,6 +38,12 @@ export class TransactionsController {
     return this.transactionsService.createCashOut(req.user.userId, dto);
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Get('mine')
+  findMine(@Req() req: { user: { userId: string } }) {
+    return this.transactionsService.findMine(req.user.userId);
+  }
+
   @UseGuards(ApiKeyGuard)
   @Get('cash-in')
   findCashIn() {

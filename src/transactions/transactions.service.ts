@@ -20,6 +20,16 @@ type CashTransactionRow = {
   reviewer: { username: string } | null;
 };
 
+type MyCashTransactionRow = {
+  id: bigint;
+  type: string;
+  method: string;
+  amount: unknown;
+  reference: string | null;
+  status: string;
+  createdAt: Date;
+};
+
 @Injectable()
 export class TransactionsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -35,6 +45,29 @@ export class TransactionsService {
       createdAt: row.createdAt.toISOString(),
       reviewedBy: row.reviewer?.username ?? null,
     };
+  }
+
+  private toMine(row: MyCashTransactionRow) {
+    return {
+      id: row.id.toString(),
+      type: row.type,
+      method: row.method,
+      reference: row.reference,
+      amount: Number(row.amount),
+      status: row.status,
+      createdAt: row.createdAt.toISOString(),
+    };
+  }
+
+  // A player's own deposit + withdrawal history, both types merged into one
+  // feed newest-first — the CRM's admin lists (findCashIn/findCashOut) stay
+  // split by type since staff review each queue separately.
+  async findMine(userId: string) {
+    const rows = await this.prisma.cashTransaction.findMany({
+      where: { userId: BigInt(userId) },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((r) => this.toMine(r));
   }
 
   async findCashIn() {
