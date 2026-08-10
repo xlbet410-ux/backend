@@ -1,12 +1,24 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import { mkdir, writeFile } from 'fs/promises';
+import { join } from 'path';
+import sharp from 'sharp';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '../../generated/prisma/client';
 import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
+
+const UPLOAD_DIR = join(process.cwd(), 'uploads', 'offers');
+const ALLOWED_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+// Cards never render an offer image larger than this — no point storing or
+// shipping pixels past it. Re-encoding to webp is what actually shrinks
+// file size; the resize just caps the upper bound for oversized phone photos.
+const MAX_DIMENSION = 1600;
 
 type TriggerBase = { userId: bigint };
 type OfferTrigger =
@@ -27,6 +39,32 @@ type OfferTrigger =
 @Injectable()
 export class OffersService {
   constructor(private readonly prisma: PrismaService) {}
+
+  // Re-encodes any uploaded offer image to webp (real, lossy compression —
+  // not just a dimension check) and caps its dimensions. Returns the public
+  // /uploads/... URL to be saved as the offer's imageUrl/bannerUrl.
+  async uploadImage(file: Express.Multer.File) {
+    if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+      throw new BadRequestException('Only PNG, JPG, WEBP, or GIF images are supported.');
+    }
+
+    let optimized: Buffer;
+    try {
+      optimized = await sharp(file.buffer)
+        .rotate() // respect EXIF orientation before resizing
+        .resize({ width: MAX_DIMENSION, height: MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 82 })
+        .toBuffer();
+    } catch {
+      throw new BadRequestException("Couldn't read this image file. It may be corrupted.");
+    }
+
+    await mkdir(UPLOAD_DIR, { recursive: true });
+    const filename = `${randomUUID()}.webp`;
+    await writeFile(join(UPLOAD_DIR, filename), optimized);
+
+    return { url: `/uploads/offers/${filename}` };
+  }
 
   private toAdmin(
     offer: NonNullable<Awaited<ReturnType<typeof this.prisma.offer.findFirst>>>,

@@ -7,7 +7,6 @@ import {
   IsObject,
   IsOptional,
   IsString,
-  IsUrl,
   Matches,
   Max,
   Min,
@@ -46,12 +45,15 @@ export class UpdateOfferDto {
   @IsString()
   descriptionEn?: string;
 
+  // Relative /uploads/... path from the offer image upload endpoint (same
+  // convention as SliderImage/PromoImage), not a full URL — @IsUrl would
+  // reject it.
   @IsOptional()
-  @IsUrl({ require_tld: false })
+  @IsString()
   imageUrl?: string;
 
   @IsOptional()
-  @IsUrl({ require_tld: false })
+  @IsString()
   bannerUrl?: string;
 
   @IsOptional()

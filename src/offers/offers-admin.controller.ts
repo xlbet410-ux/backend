@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -7,12 +8,18 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { OffersService } from './offers.service';
 import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
 import { ApiKeyGuard } from '../common/guards/api-key.guard';
+
+const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 
 // Admin-only — called by the CRM server-side (same trust model as every
 // other /admin-style route in this app: API key, not end-user auth).
@@ -46,6 +53,15 @@ export class OffersAdminController {
   @Post()
   create(@Body() dto: CreateOfferDto) {
     return this.offersService.createOffer(dto);
+  }
+
+  @Post('upload-image')
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: MAX_IMAGE_SIZE } }))
+  uploadImage(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('No file uploaded.');
+    }
+    return this.offersService.uploadImage(file);
   }
 
   @Patch(':id')
