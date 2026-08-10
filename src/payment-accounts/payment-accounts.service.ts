@@ -1,10 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePaymentAccountDto } from './dto/create-payment-account.dto';
 import { UpdatePaymentAccountDto } from './dto/update-payment-account.dto';
-
-const SALT_ROUNDS = 10;
 
 type PaymentAccountRow = {
   id: bigint;
@@ -13,32 +10,32 @@ type PaymentAccountRow = {
   accountNumber: string;
   accountName: string | null;
   details: string | null;
-  commission: unknown;
-  accountLimit: unknown;
-  monthlyEarn: unknown;
-  monthlyCollect: unknown;
   isActive: boolean;
   createdAt: Date;
+};
+
+type AdminPaymentAccountRow = PaymentAccountRow & {
+  agentId: bigint;
+  agent: { fullName: string };
 };
 
 @Injectable()
 export class PaymentAccountsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  // Full admin view — everything the CRM's Agent panel shows, but still
-  // never the password hash (write-only, never read back).
-  private toAdmin(account: PaymentAccountRow) {
+  // Admin view — includes which agent this number belongs to. Commission,
+  // limits, and earnings now live on the Agent itself (see AgentsService),
+  // not on the individual number.
+  private toAdmin(account: AdminPaymentAccountRow) {
     return {
       id: account.id.toString(),
+      agentId: account.agentId.toString(),
+      agentFullName: account.agent.fullName,
       method: account.method,
       label: account.label,
       accountNumber: account.accountNumber,
       accountName: account.accountName,
       details: account.details,
-      commission: Number(account.commission),
-      accountLimit: Number(account.accountLimit),
-      monthlyEarn: Number(account.monthlyEarn),
-      monthlyCollect: Number(account.monthlyCollect),
       isActive: account.isActive,
       createdAt: account.createdAt.toISOString(),
     };
@@ -46,7 +43,7 @@ export class PaymentAccountsService {
 
   // Public view — what the bet site's Deposit/Withdraw page reads with no
   // auth, so it's deliberately stripped down to just what a depositing
-  // player needs to see (no commission, limits, or earnings figures).
+  // player needs to see.
   private toPublicActive(account: PaymentAccountRow) {
     return {
       id: account.id.toString(),
@@ -62,6 +59,7 @@ export class PaymentAccountsService {
 
   async findAll() {
     const accounts = await this.prisma.paymentAccount.findMany({
+      include: { agent: true },
       orderBy: [{ method: 'asc' }, { createdAt: 'asc' }],
     });
     return accounts.map((a) => this.toAdmin(a));
@@ -76,22 +74,23 @@ export class PaymentAccountsService {
   }
 
   async create(dto: CreatePaymentAccountDto) {
-    const passwordHash = dto.password
-      ? await bcrypt.hash(dto.password, SALT_ROUNDS)
-      : null;
+    const agent = await this.prisma.agent.findUnique({
+      where: { id: BigInt(dto.agentId) },
+    });
+    if (!agent) {
+      throw new NotFoundException('Agent not found.');
+    }
+
     const account = await this.prisma.paymentAccount.create({
       data: {
+        agentId: agent.id,
         method: dto.method,
         label: dto.label.trim(),
         accountNumber: dto.accountNumber.trim(),
         accountName: dto.accountName?.trim() || null,
         details: dto.details?.trim() || null,
-        passwordHash,
-        commission: dto.commission ?? 0,
-        accountLimit: dto.accountLimit ?? 0,
-        monthlyEarn: dto.monthlyEarn ?? 0,
-        monthlyCollect: dto.monthlyCollect ?? 0,
       },
+      include: { agent: true },
     });
     return this.toAdmin(account);
   }
@@ -117,19 +116,9 @@ export class PaymentAccountsService {
         ...(dto.details !== undefined && {
           details: dto.details.trim() || null,
         }),
-        ...(dto.password && {
-          passwordHash: await bcrypt.hash(dto.password, SALT_ROUNDS),
-        }),
-        ...(dto.commission !== undefined && { commission: dto.commission }),
-        ...(dto.accountLimit !== undefined && {
-          accountLimit: dto.accountLimit,
-        }),
-        ...(dto.monthlyEarn !== undefined && { monthlyEarn: dto.monthlyEarn }),
-        ...(dto.monthlyCollect !== undefined && {
-          monthlyCollect: dto.monthlyCollect,
-        }),
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
       },
+      include: { agent: true },
     });
     return this.toAdmin(account);
   }

@@ -16,6 +16,7 @@ import { PromoImagesModule } from './promo-images/promo-images.module';
 import { GamesModule } from './games/games.module';
 import { PaymentAccountsModule } from './payment-accounts/payment-accounts.module';
 import { TransactionsModule } from './transactions/transactions.module';
+import { AgentsModule } from './agents/agents.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { TransactionsModule } from './transactions/transactions.module';
     GamesModule,
     PaymentAccountsModule,
     TransactionsModule,
+    AgentsModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
