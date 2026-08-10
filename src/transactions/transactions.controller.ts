@@ -45,12 +45,6 @@ export class TransactionsController {
   }
 
   @UseGuards(ApiKeyGuard)
-  @Get('by-agent/:agentId')
-  findByAgent(@Param('agentId') agentId: string) {
-    return this.transactionsService.findByAgent(agentId);
-  }
-
-  @UseGuards(ApiKeyGuard)
   @Get('cash-in')
   findCashIn() {
     return this.transactionsService.findCashIn();

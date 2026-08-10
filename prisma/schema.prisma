@@ -167,15 +167,9 @@ model CashTransaction {
   createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
   updatedAt  DateTime  @default(now()) @map("updated_at") @db.Timestamptz
 
-  // Staff-approved requests set reviewedBy; agent-approved requests (an
-  // agent resolving a request tied to their own payment account) set
-  // approvedByAgentId instead — never both.
-  approvedByAgentId BigInt? @map("approved_by_agent_id")
-
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   reviewer       Account?        @relation(fields: [reviewedBy], references: [id], onDelete: SetNull)
   paymentAccount PaymentAccount? @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
-  approvingAgent Agent?          @relation(fields: [approvedByAgentId], references: [id], onDelete: SetNull)
 
   @@map("cash_transactions")
 }
@@ -204,35 +198,13 @@ model PromoImage {
   @@map("promo_images")
 }
 
-// A payment number (one bKash number, one bank account, ...) belonging to
-// an Agent. One agent can hold several of these, same method or mixed.
 model PaymentAccount {
-  id            BigInt   @id @default(autoincrement())
-  agentId       BigInt   @map("agent_id")
-  method        String   @db.VarChar(20)
-  label         String   @db.VarChar(100)
-  accountNumber String   @map("account_number") @db.VarChar(150)
-  accountName   String?  @map("account_name") @db.VarChar(100)
-  details       String?  @db.VarChar(255)
-  isActive      Boolean  @default(true) @map("is_active")
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt     DateTime @default(now()) @map("updated_at") @db.Timestamptz
-
-  agent            Agent             @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  cashTransactions CashTransaction[]
-
-  @@index([agentId])
-  @@map("payment_accounts")
-}
-
-// The agent's own login/profile — one agent can own multiple PaymentAccount
-// numbers (see above). Logs into the CRM separately from staff Accounts,
-// via phone number + password, and only ever sees requests tied to their
-// own numbers.
-model Agent {
   id             BigInt   @id @default(autoincrement())
-  fullName       String   @map("full_name") @db.VarChar(100)
-  phoneNumber    String   @unique @map("phone_number") @db.VarChar(20)
+  method         String   @db.VarChar(20)
+  label          String   @db.VarChar(100)
+  accountNumber  String   @map("account_number") @db.VarChar(150)
+  accountName    String?  @map("account_name") @db.VarChar(100)
+  details        String?  @db.VarChar(255)
   passwordHash   String?  @map("password_hash") @db.VarChar(255)
   commission     Decimal  @default(0) @db.Decimal(5, 2)
   accountLimit   Decimal  @default(0) @map("account_limit") @db.Decimal(14, 2)
@@ -242,10 +214,9 @@ model Agent {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt      DateTime @default(now()) @map("updated_at") @db.Timestamptz
 
-  paymentAccounts  PaymentAccount[]
-  approvedRequests CashTransaction[]
+  cashTransactions CashTransaction[]
 
-  @@map("agents")
+  @@map("payment_accounts")
 }
 
 model GameTransaction {
