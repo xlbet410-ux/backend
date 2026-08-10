@@ -40,6 +40,11 @@ export class GamesController {
     return this.gamesService.getCatalogCounts();
   }
 
+  @Get('games/live-wins')
+  getLiveWins() {
+    return this.gamesService.getLiveWins();
+  }
+
   @Get('games/catalog')
   getCatalog(@Query() query: GetCatalogQueryDto) {
     return this.gamesService.getCatalogPage(
