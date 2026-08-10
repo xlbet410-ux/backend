@@ -79,7 +79,10 @@ model RolePage {
 model Account {
   id           BigInt   @id @default(autoincrement())
   username     String   @unique @db.VarChar(50)
-  passwordHash String   @map("password_hash") @db.VarChar(255)
+  // Nullable — an admin can create an account with no password set yet and
+  // add one later; such an account just can't log in until then (mirrors
+  // Agent.passwordHash).
+  passwordHash String?  @map("password_hash") @db.VarChar(255)
   roleId       BigInt   @map("role_id")
   percentage   Decimal? @db.Decimal(5, 2)
   isActive     Boolean  @default(true) @map("is_active")

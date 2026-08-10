@@ -7,20 +7,22 @@ import {
   MinLength,
 } from 'class-validator';
 
-export class CreateAccountDto {
+export class UpdateAccountDto {
+  @IsOptional()
   @IsString()
   @MinLength(3)
-  username: string;
+  username?: string;
 
-  // Optional — an account with no password set can't log in yet, but can
-  // still exist and be managed by admins (mirrors Agent creation).
+  // Omit to leave the current password unchanged; an admin can set or
+  // change it here without needing to know the old one.
   @IsOptional()
   @IsString()
   @MinLength(4)
   password?: string;
 
+  @IsOptional()
   @IsString()
-  roleId: string;
+  roleId?: string;
 
   @IsOptional()
   @IsNumber()

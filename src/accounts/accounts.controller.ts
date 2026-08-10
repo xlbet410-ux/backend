@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { AccountsService } from './accounts.service';
 import { CreateAccountDto } from './dto/create-account.dto';
+import { UpdateAccountDto } from './dto/update-account.dto';
 import { AccountLoginDto } from './dto/login.dto';
 import { SetActiveDto } from './dto/set-active.dto';
 import { ChangeAccountPasswordDto } from './dto/change-password.dto';
@@ -40,6 +41,11 @@ export class AccountsController {
   @Patch('change-password')
   changePassword(@Body() dto: ChangeAccountPasswordDto) {
     return this.accountsService.changePassword(dto);
+  }
+
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() dto: UpdateAccountDto) {
+    return this.accountsService.update(id, dto);
   }
 
   @Delete(':id')

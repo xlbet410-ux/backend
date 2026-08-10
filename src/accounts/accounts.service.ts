@@ -8,6 +8,7 @@ import {
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAccountDto } from './dto/create-account.dto';
+import { UpdateAccountDto } from './dto/update-account.dto';
 import { AccountLoginDto } from './dto/login.dto';
 import { ChangeAccountPasswordDto } from './dto/change-password.dto';
 
@@ -61,7 +62,9 @@ export class AccountsService {
       throw new BadRequestException('Select a valid role.');
     }
 
-    const passwordHash = await bcrypt.hash(dto.password, SALT_ROUNDS);
+    const passwordHash = dto.password
+      ? await bcrypt.hash(dto.password, SALT_ROUNDS)
+      : null;
     const account = await this.prisma.account.create({
       data: {
         username: dto.username,
@@ -71,6 +74,46 @@ export class AccountsService {
       },
     });
     return { id: account.id.toString() };
+  }
+
+  async update(id: string, dto: UpdateAccountDto) {
+    const existing = await this.prisma.account.findUnique({
+      where: { id: BigInt(id) },
+    });
+    if (!existing) {
+      throw new NotFoundException('Account not found.');
+    }
+
+    if (dto.username && dto.username !== existing.username) {
+      const clash = await this.prisma.account.findUnique({
+        where: { username: dto.username },
+      });
+      if (clash) {
+        throw new ConflictException('Username already exists.');
+      }
+    }
+
+    if (dto.roleId) {
+      const role = await this.prisma.role.findUnique({
+        where: { id: BigInt(dto.roleId) },
+      });
+      if (!role) {
+        throw new BadRequestException('Select a valid role.');
+      }
+    }
+
+    await this.prisma.account.update({
+      where: { id: existing.id },
+      data: {
+        ...(dto.username !== undefined && { username: dto.username }),
+        ...(dto.roleId !== undefined && { roleId: BigInt(dto.roleId) }),
+        ...(dto.percentage !== undefined && { percentage: dto.percentage }),
+        ...(dto.password && {
+          passwordHash: await bcrypt.hash(dto.password, SALT_ROUNDS),
+        }),
+      },
+    });
+    return { success: true };
   }
 
   async setActive(id: string, isActive: boolean) {
@@ -103,7 +146,7 @@ export class AccountsService {
       where: { username: dto.username },
       include: { role: { include: { pages: true } } },
     });
-    if (!account) {
+    if (!account || !account.passwordHash) {
       throw new UnauthorizedException('Invalid username or password.');
     }
 
@@ -132,7 +175,7 @@ export class AccountsService {
     const account = await this.prisma.account.findUnique({
       where: { username: dto.username },
     });
-    if (!account) {
+    if (!account || !account.passwordHash) {
       throw new UnauthorizedException();
     }
 
