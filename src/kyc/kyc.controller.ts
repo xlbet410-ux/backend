@@ -46,7 +46,11 @@ export class KycController {
     @Req() req: { user: { userId: string } },
     @Body() dto: SubmitKycDto,
     @UploadedFiles()
-    files: { front?: Express.Multer.File[]; back?: Express.Multer.File[]; selfie?: Express.Multer.File[] },
+    files: {
+      front?: Express.Multer.File[];
+      back?: Express.Multer.File[];
+      selfie?: Express.Multer.File[];
+    },
   ) {
     return this.kycService.submit(req.user.userId, dto, files);
   }
@@ -70,7 +74,10 @@ export class KycController {
     @Param('side') side: string,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { stream, contentType } = await this.kycService.getImageStream(id, side);
+    const { stream, contentType } = await this.kycService.getImageStream(
+      id,
+      side,
+    );
     res.set({ 'Content-Type': contentType });
     return new StreamableFile(stream);
   }

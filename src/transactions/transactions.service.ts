@@ -3,11 +3,15 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCashTransactionDto } from './dto/create-cash-transaction.dto';
 import { ResolveCashTransactionDto } from './dto/resolve-cash-transaction.dto';
+import { OffersService } from '../offers/offers.service';
+import { BonusService } from '../bonus/bonus.service';
+import { Prisma } from '../../generated/prisma/client';
 
 type AgentAccount = {
   label: string;
@@ -49,7 +53,13 @@ const ADMIN_INCLUDE = {
 
 @Injectable()
 export class TransactionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(TransactionsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly offersService: OffersService,
+    private readonly bonusService: BonusService,
+  ) {}
 
   private toAdmin(row: CashTransactionRow) {
     return {
@@ -161,6 +171,7 @@ export class TransactionsService {
         amount: dto.amount,
         reference: dto.reference.trim(),
         paymentAccountId,
+        offerId: dto.offerId ? BigInt(dto.offerId) : null,
       },
       include: ADMIN_INCLUDE,
     });
@@ -184,6 +195,10 @@ export class TransactionsService {
       throw new ForbiddenException(
         'Complete KYC verification before requesting a withdrawal.',
       );
+    }
+    const canWithdraw = await this.bonusService.canWithdraw(user.id);
+    if (!canWithdraw.allowed) {
+      throw new ForbiddenException(canWithdraw.reason);
     }
     if (Number(user.balance) < dto.amount) {
       throw new ConflictException(
@@ -286,7 +301,48 @@ export class TransactionsService {
         },
       });
     });
+
+    // Offer triggers run after the approval itself has committed, and never
+    // undo it — a bug in bonus-awarding must never block or roll back an
+    // otherwise-valid deposit/withdrawal approval.
+    if (tx.type === 'cash_in') {
+      await this.fireDepositTriggers(tx.userId, tx.amount, tx.offerId);
+    }
+
     return { success: true };
+  }
+
+  private async fireDepositTriggers(
+    userId: bigint,
+    amount: Prisma.Decimal,
+    offerId: bigint | null,
+  ) {
+    try {
+      const depositCount = await this.prisma.cashTransaction.count({
+        where: { userId, type: 'cash_in', status: 'completed' },
+      });
+
+      if (depositCount === 1) {
+        await this.offersService.processTrigger(
+          { type: 'first_deposit', userId, amount },
+          offerId ?? undefined,
+        );
+      } else {
+        await this.offersService.processTrigger(
+          { type: 'nth_deposit', userId, amount, depositCount },
+          offerId ?? undefined,
+        );
+      }
+      await this.offersService.processTrigger(
+        { type: 'every_deposit', userId, amount },
+        offerId ?? undefined,
+      );
+    } catch (err) {
+      // Never let a broken offer definition break a real deposit approval.
+      this.logger.error(
+        `Offer trigger failed for user ${userId}: ${(err as Error).message}`,
+      );
+    }
   }
 
   async reject(id: string, dto: ResolveCashTransactionDto) {

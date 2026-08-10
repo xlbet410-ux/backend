@@ -37,4 +37,10 @@ export class CreateCashTransactionDto {
   @IsOptional()
   @IsNumberString()
   paymentAccountId?: string;
+
+  // The offer the player picked on the deposit page (cash-in only) — not
+  // trusted as-is; re-validated in full when the deposit is later approved.
+  @IsOptional()
+  @IsNumberString()
+  offerId?: string;
 }

@@ -1,4 +1,10 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { createReadStream } from 'fs';
 import { mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -6,6 +12,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SubmitKycDto } from './dto/submit-kyc.dto';
 import { VerifyKycDto } from './dto/verify-kyc.dto';
 import { RejectKycDto } from './dto/reject-kyc.dto';
+import { OffersService } from '../offers/offers.service';
 
 // Deliberately NOT under the statically-served `uploads/` directory (see main.ts) —
 // these are government ID photos and selfies, so they must only ever be reachable
@@ -23,15 +30,22 @@ type KycFiles = {
 
 @Injectable()
 export class KycService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(KycService.name);
 
-  private toMine(row: {
-    documentType: string;
-    status: string;
-    rejectReason: string | null;
-    submittedAt: Date;
-    reviewedAt: Date | null;
-  } | null) {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly offersService: OffersService,
+  ) {}
+
+  private toMine(
+    row: {
+      documentType: string;
+      status: string;
+      rejectReason: string | null;
+      submittedAt: Date;
+      reviewedAt: Date | null;
+    } | null,
+  ) {
     if (!row) return null;
     return {
       status: row.status,
@@ -68,7 +82,9 @@ export class KycService {
   }
 
   async findMine(userId: string) {
-    const row = await this.prisma.kycVerification.findUnique({ where: { userId: BigInt(userId) } });
+    const row = await this.prisma.kycVerification.findUnique({
+      where: { userId: BigInt(userId) },
+    });
     return this.toMine(row);
   }
 
@@ -85,15 +101,21 @@ export class KycService {
     const back = files.back?.[0];
     const selfie = files.selfie?.[0];
     if (!front || !back || !selfie) {
-      throw new BadRequestException('Front, back, and selfie photos are all required.');
+      throw new BadRequestException(
+        'Front, back, and selfie photos are all required.',
+      );
     }
     for (const file of [front, back, selfie]) {
       if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
-        throw new BadRequestException('Only JPEG photos captured via the camera are accepted.');
+        throw new BadRequestException(
+          'Only JPEG photos captured via the camera are accepted.',
+        );
       }
     }
 
-    const existing = await this.prisma.kycVerification.findUnique({ where: { userId: BigInt(userId) } });
+    const existing = await this.prisma.kycVerification.findUnique({
+      where: { userId: BigInt(userId) },
+    });
     if (existing && existing.status !== 'rejected') {
       throw new ConflictException(
         existing.status === 'pending'
@@ -134,52 +156,89 @@ export class KycService {
     if (!SIDES.includes(side as Side)) {
       throw new BadRequestException('Invalid image side.');
     }
-    const row = await this.prisma.kycVerification.findUnique({ where: { id: BigInt(id) } });
+    const row = await this.prisma.kycVerification.findUnique({
+      where: { id: BigInt(id) },
+    });
     if (!row) {
       throw new NotFoundException('KYC submission not found.');
     }
     const relativePath =
-      side === 'front' ? row.documentFrontUrl : side === 'back' ? row.documentBackUrl : row.selfieUrl;
+      side === 'front'
+        ? row.documentFrontUrl
+        : side === 'back'
+          ? row.documentBackUrl
+          : row.selfieUrl;
     const stream = createReadStream(join(PRIVATE_UPLOAD_DIR, relativePath));
     return { stream, contentType: 'image/jpeg' };
   }
 
   async verify(id: string, dto: VerifyKycDto) {
-    const row = await this.prisma.kycVerification.findUnique({ where: { id: BigInt(id) } });
+    const row = await this.prisma.kycVerification.findUnique({
+      where: { id: BigInt(id) },
+    });
     if (!row) {
       throw new NotFoundException('KYC submission not found.');
     }
     if (row.status !== 'pending') {
       throw new ConflictException('This submission has already been reviewed.');
     }
-    const reviewer = await this.prisma.account.findUnique({ where: { username: dto.reviewerUsername } });
+    const reviewer = await this.prisma.account.findUnique({
+      where: { username: dto.reviewerUsername },
+    });
     if (!reviewer) {
       throw new NotFoundException('Reviewer account not found.');
     }
 
     await this.prisma.kycVerification.update({
       where: { id: row.id },
-      data: { status: 'verified', reviewedBy: reviewer.id, reviewedAt: new Date(), rejectReason: null },
+      data: {
+        status: 'verified',
+        reviewedBy: reviewer.id,
+        reviewedAt: new Date(),
+        rejectReason: null,
+      },
     });
+
+    // Never let a broken offer definition block a real KYC approval.
+    try {
+      await this.offersService.processTrigger({
+        type: 'kyc_approved',
+        userId: row.userId,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Offer trigger failed for user ${row.userId}: ${(err as Error).message}`,
+      );
+    }
+
     return { success: true };
   }
 
   async reject(id: string, dto: RejectKycDto) {
-    const row = await this.prisma.kycVerification.findUnique({ where: { id: BigInt(id) } });
+    const row = await this.prisma.kycVerification.findUnique({
+      where: { id: BigInt(id) },
+    });
     if (!row) {
       throw new NotFoundException('KYC submission not found.');
     }
     if (row.status !== 'pending') {
       throw new ConflictException('This submission has already been reviewed.');
     }
-    const reviewer = await this.prisma.account.findUnique({ where: { username: dto.reviewerUsername } });
+    const reviewer = await this.prisma.account.findUnique({
+      where: { username: dto.reviewerUsername },
+    });
     if (!reviewer) {
       throw new NotFoundException('Reviewer account not found.');
     }
 
     await this.prisma.kycVerification.update({
       where: { id: row.id },
-      data: { status: 'rejected', reviewedBy: reviewer.id, reviewedAt: new Date(), rejectReason: dto.reason },
+      data: {
+        status: 'rejected',
+        reviewedBy: reviewer.id,
+        reviewedAt: new Date(),
+        rejectReason: dto.reason,
+      },
     });
     return { success: true };
   }

@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -10,14 +11,18 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { OffersService } from '../offers/offers.service';
 
 const SALT_ROUNDS = 10;
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
+    private readonly offersService: OffersService,
   ) {}
 
   private async generateOwnReferralCode(): Promise<string> {
@@ -83,6 +88,18 @@ export class AuthService {
         agreedTerms: dto.agreedTerms,
       },
     });
+
+    // Never let a broken offer definition block registration.
+    try {
+      await this.offersService.processTrigger({
+        type: 'signup',
+        userId: user.id,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Offer trigger failed for user ${user.id}: ${(err as Error).message}`,
+      );
+    }
 
     const token = await this.jwt.signAsync({
       sub: user.id.toString(),

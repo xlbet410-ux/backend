@@ -30,6 +30,10 @@ model User {
   // Admin-controlled kill switch, independent of KYC status — see
   // CashTransaction for how this and KYC together gate withdrawals.
   isActive        Boolean  @default(true) @map("is_active")
+  // Plain admin-settable tiers for offer targeting — no automated VIP/tier
+  // system sets these yet; an admin edits them directly until one exists.
+  vipLevel        Int      @default(0) @map("vip_level")
+  agentTier       Int      @default(0) @map("agent_tier")
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz
 
@@ -37,6 +41,8 @@ model User {
   kycVerification  KycVerification?
   gameTransactions GameTransaction[]
   cashTransactions CashTransaction[]
+  offerClaims      OfferClaim[]
+  bonusWallets     BonusWallet[]
 
   @@map("users")
 }
@@ -175,10 +181,17 @@ model CashTransaction {
   // approvedByAgentId instead — never both.
   approvedByAgentId BigInt? @map("approved_by_agent_id")
 
+  // The deposit-offer the player picked on the deposit page, if any — only
+  // actually applied once this cash-in is approved (see
+  // TransactionsService.approve), and only if the player still qualifies
+  // at that point (budget/KYC/limits are re-checked, not trusted from here).
+  offerId BigInt? @map("offer_id")
+
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   reviewer       Account?        @relation(fields: [reviewedBy], references: [id], onDelete: SetNull)
   paymentAccount PaymentAccount? @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
   approvingAgent Agent?          @relation(fields: [approvedByAgentId], references: [id], onDelete: SetNull)
+  offer          Offer?          @relation(fields: [offerId], references: [id], onDelete: SetNull)
 
   @@map("cash_transactions")
 }
@@ -265,4 +278,124 @@ model GameTransaction {
 
   @@index([userId])
   @@map("game_transactions")
+}
+
+// A configurable bonus definition an admin creates in the CRM — no code
+// change needed to launch a new promotion. See OfferService for how a
+// real-world event (deposit, KYC approval, ...) is matched against these.
+model Offer {
+  id BigInt @id @default(autoincrement())
+
+  slug          String  @unique @db.VarChar(100)
+  titleBn       String  @map("title_bn") @db.VarChar(200)
+  titleEn       String? @map("title_en") @db.VarChar(200)
+  descriptionBn String? @map("description_bn")
+  descriptionEn String? @map("description_en")
+  imageUrl      String? @map("image_url") @db.VarChar(500)
+  bannerUrl     String? @map("banner_url") @db.VarChar(500)
+  termsBn       String? @map("terms_bn")
+  termsEn       String? @map("terms_en")
+
+  // 'deposit' | 'referral' | 'level' | 'daily' | 'cashback' | 'special'
+  category String @db.VarChar(30)
+
+  // 'first_deposit' | 'nth_deposit' | 'every_deposit' | 'kyc_approved' |
+  // 'vip_levelup' | 'referral_milestone' | 'daily_login' | 'signup' | 'manual_claim'
+  triggerType   String @map("trigger_type") @db.VarChar(50)
+  // Trigger-specific extra config, e.g. { "nth": 2 } for nth_deposit.
+  triggerConfig Json?  @map("trigger_config")
+
+  minDeposit        Decimal? @map("min_deposit") @db.Decimal(14, 2)
+  maxDeposit        Decimal? @map("max_deposit") @db.Decimal(14, 2)
+  requiredVipLevel  Int?     @map("required_vip_level")
+  requiredAgentTier Int?     @map("required_agent_tier")
+  requiresKyc       Boolean  @default(false) @map("requires_kyc")
+  isNewUsersOnly    Boolean  @default(false) @map("is_new_users_only")
+  maxClaimsPerUser  Int      @default(1) @map("max_claims_per_user")
+
+  // 'fixed' | 'percentage' | 'no_reward'
+  rewardType   String   @map("reward_type") @db.VarChar(30)
+  rewardAmount Decimal? @map("reward_amount") @db.Decimal(14, 2)
+  rewardCap    Decimal? @map("reward_cap") @db.Decimal(14, 2)
+
+  turnoverMultiplier Decimal @default(1) @map("turnover_multiplier") @db.Decimal(5, 2)
+  // 'bonus' | 'deposit_plus_bonus' | 'deposit_only'
+  turnoverBase       String  @default("bonus") @map("turnover_base") @db.VarChar(20)
+  bonusValidityDays  Int?    @default(30) @map("bonus_validity_days")
+
+  totalBudget  Decimal? @map("total_budget") @db.Decimal(14, 2)
+  totalClaimed Decimal  @default(0) @map("total_claimed") @db.Decimal(14, 2)
+
+  startsAt DateTime? @map("starts_at") @db.Timestamptz
+  endsAt   DateTime? @map("ends_at") @db.Timestamptz
+  isActive Boolean   @default(true) @map("is_active")
+  priority Int       @default(0)
+
+  claimCount Int @default(0) @map("claim_count")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  claims           OfferClaim[]
+  cashTransactions CashTransaction[]
+
+  @@index([isActive, category])
+  @@index([isActive, triggerType])
+  @@index([startsAt, endsAt])
+  @@map("offers")
+}
+
+// One record per successful award of an Offer to a user — a permanent,
+// point-in-time snapshot (see metadata) independent of later edits to the
+// Offer itself.
+model OfferClaim {
+  id            BigInt  @id @default(autoincrement())
+  offerId       BigInt  @map("offer_id")
+  userId        BigInt  @map("user_id")
+  bonusWalletId BigInt? @unique @map("bonus_wallet_id")
+
+  triggerAmount Decimal? @map("trigger_amount") @db.Decimal(14, 2)
+  rewardAmount  Decimal  @map("reward_amount") @db.Decimal(14, 2)
+
+  metadata  Json?
+  claimedAt DateTime @default(now()) @map("claimed_at") @db.Timestamptz
+
+  offer       Offer        @relation(fields: [offerId], references: [id])
+  user        User         @relation(fields: [userId], references: [id])
+  bonusWallet BonusWallet? @relation(fields: [bonusWalletId], references: [id])
+
+  @@index([offerId, userId])
+  @@index([userId, claimedAt])
+  @@map("offer_claims")
+}
+
+// A pending or resolved bonus credit. Bonus money never touches
+// User.balance directly — BonusService.processTurnover moves it there only
+// once turnoverRequired is met (see that service for the FIFO rule: only
+// the single oldest active wallet per user ever receives turnover).
+model BonusWallet {
+  id     BigInt @id @default(autoincrement())
+  userId BigInt @map("user_id")
+
+  // The offer's slug at claim time.
+  type             String  @db.VarChar(50)
+  amount           Decimal @db.Decimal(14, 2)
+  turnoverRequired Decimal @map("turnover_required") @db.Decimal(14, 2)
+  turnoverDone     Decimal @default(0) @map("turnover_done") @db.Decimal(14, 2)
+
+  // 'active' | 'completed' | 'forfeited' | 'expired'
+  status String @default("active") @db.VarChar(20)
+
+  expiresAt   DateTime? @map("expires_at") @db.Timestamptz
+  claimedAt   DateTime  @default(now()) @map("claimed_at") @db.Timestamptz
+  completedAt DateTime? @map("completed_at") @db.Timestamptz
+
+  metadata Json?
+
+  user       User        @relation(fields: [userId], references: [id])
+  offerClaim OfferClaim?
+
+  @@index([userId, status, claimedAt])
+  @@index([status, expiresAt])
+  @@map("bonus_wallets")
 }

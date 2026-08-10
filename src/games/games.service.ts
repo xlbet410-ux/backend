@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { BonusService } from '../bonus/bonus.service';
 import {
   CatalogGame,
   GAME_CATEGORIES,
@@ -65,6 +66,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly bonusService: BonusService,
   ) {}
 
   onModuleInit(): void {
@@ -610,7 +612,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      const balanceAfter = await this.prisma.$transaction(async (tx) => {
+      const result = await this.prisma.$transaction(async (tx) => {
         const user = await tx.user.findUnique({
           where: { gameAccount: member_account },
         });
@@ -640,9 +642,27 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
             balanceAfter: newBalance,
           },
         });
-        return newBalance;
+        return { newBalance, userId: user.id };
       });
-      return { balance: balanceAfter };
+
+      // Bonus turnover runs after the bet/win balance update has already
+      // committed (never nested inside that transaction — BonusService opens
+      // its own). Wrapped so a bonus-processing failure can never break the
+      // balance response Oracle is waiting on for this bet.
+      if (bet_amount && bet_amount > 0) {
+        try {
+          await this.bonusService.processTurnover(
+            result.userId,
+            new Prisma.Decimal(bet_amount),
+          );
+        } catch (err) {
+          this.logger.error(
+            `Bonus turnover failed for user ${result.userId}: ${(err as Error).message}`,
+          );
+        }
+      }
+
+      return { balance: result.newBalance };
     } catch (err) {
       // Two concurrent retries can both pass the findUnique check above before either
       // commits; the serial_number unique constraint catches that race here instead.
