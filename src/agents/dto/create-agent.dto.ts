@@ -62,16 +62,6 @@ export class CreateAgentDto {
   @Min(0)
   accountLimit?: number;
 
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  monthlyEarn?: number;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  monthlyCollect?: number;
-
   // Lets the admin add the agent's first number(s) — same method or mixed
   // — in the same request that creates the profile.
   @IsOptional()

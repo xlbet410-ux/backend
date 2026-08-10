@@ -19,8 +19,6 @@ type AgentRow = {
   phoneNumber: string;
   commission: unknown;
   accountLimit: unknown;
-  monthlyEarn: unknown;
-  monthlyCollect: unknown;
   isActive: boolean;
   createdAt: Date;
   paymentAccounts: {
@@ -48,8 +46,6 @@ export class AgentsService {
       phoneNumber: agent.phoneNumber,
       commission: Number(agent.commission),
       accountLimit: Number(agent.accountLimit),
-      monthlyEarn: Number(agent.monthlyEarn),
-      monthlyCollect: Number(agent.monthlyCollect),
       isActive: agent.isActive,
       createdAt: agent.createdAt.toISOString(),
       paymentAccounts: agent.paymentAccounts.map((p) => ({
@@ -105,8 +101,6 @@ export class AgentsService {
         passwordHash,
         commission: dto.commission ?? 0,
         accountLimit: dto.accountLimit ?? 0,
-        monthlyEarn: dto.monthlyEarn ?? 0,
-        monthlyCollect: dto.monthlyCollect ?? 0,
         paymentAccounts: dto.paymentAccounts?.length
           ? {
               create: dto.paymentAccounts.map((p) => ({
@@ -156,10 +150,6 @@ export class AgentsService {
         ...(dto.commission !== undefined && { commission: dto.commission }),
         ...(dto.accountLimit !== undefined && {
           accountLimit: dto.accountLimit,
-        }),
-        ...(dto.monthlyEarn !== undefined && { monthlyEarn: dto.monthlyEarn }),
-        ...(dto.monthlyCollect !== undefined && {
-          monthlyCollect: dto.monthlyCollect,
         }),
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
       },

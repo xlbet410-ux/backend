@@ -39,16 +39,6 @@ export class UpdateAgentDto {
   accountLimit?: number;
 
   @IsOptional()
-  @IsNumber()
-  @Min(0)
-  monthlyEarn?: number;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  monthlyCollect?: number;
-
-  @IsOptional()
   @IsBoolean()
   isActive?: boolean;
 }
