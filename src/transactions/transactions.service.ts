@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -8,7 +9,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateCashTransactionDto } from './dto/create-cash-transaction.dto';
 import { ResolveCashTransactionDto } from './dto/resolve-cash-transaction.dto';
 
-type AgentAccount = { label: string; accountNumber: string } | null;
+type AgentAccount = {
+  label: string;
+  accountNumber: string;
+  agentId: bigint;
+} | null;
 
 type CashTransactionRow = {
   id: bigint;
@@ -20,6 +25,7 @@ type CashTransactionRow = {
   createdAt: Date;
   user: { fullName: string };
   reviewer: { username: string } | null;
+  approvingAgent: { fullName: string } | null;
   paymentAccount: AgentAccount;
 };
 
@@ -37,6 +43,7 @@ type MyCashTransactionRow = {
 const ADMIN_INCLUDE = {
   user: true,
   reviewer: true,
+  approvingAgent: true,
   paymentAccount: true,
 } as const;
 
@@ -47,6 +54,7 @@ export class TransactionsService {
   private toAdmin(row: CashTransactionRow) {
     return {
       id: row.id.toString(),
+      type: row.type,
       player: row.user.fullName,
       method: row.method,
       reference: row.reference,
@@ -54,6 +62,7 @@ export class TransactionsService {
       status: row.status,
       createdAt: row.createdAt.toISOString(),
       reviewedBy: row.reviewer?.username ?? null,
+      approvedByAgentName: row.approvingAgent?.fullName ?? null,
       agentLabel: row.paymentAccount?.label ?? null,
       agentAccountNumber: row.paymentAccount?.accountNumber ?? null,
     };
@@ -105,6 +114,18 @@ export class TransactionsService {
       orderBy: { createdAt: 'desc' },
     });
     return rows.map((r) => this.toMine(r));
+  }
+
+  // An agent's own deposit + withdrawal requests — only ones tied to a
+  // payment account they own, both types merged newest-first (mirrors
+  // findMine for players).
+  async findByAgent(agentId: string) {
+    const rows = await this.prisma.cashTransaction.findMany({
+      where: { paymentAccount: { agentId: BigInt(agentId) } },
+      include: ADMIN_INCLUDE,
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((r) => this.toAdmin(r));
   }
 
   async findCashIn() {
@@ -185,6 +206,43 @@ export class TransactionsService {
     return this.toAdmin(tx);
   }
 
+  // Looks up whoever is resolving this request — a staff Account by
+  // username, or an Agent by id who must own the transaction's payment
+  // account. Throws if neither identity checks out.
+  private async resolveApprover(
+    tx: { paymentAccountId: bigint | null },
+    dto: ResolveCashTransactionDto,
+  ): Promise<{ reviewedBy?: bigint; approvedByAgentId?: bigint }> {
+    if (dto.agentId) {
+      if (!tx.paymentAccountId) {
+        throw new ForbiddenException(
+          'This request has no agent account attached to approve against.',
+        );
+      }
+      const account = await this.prisma.paymentAccount.findUnique({
+        where: { id: tx.paymentAccountId },
+      });
+      if (!account || account.agentId !== BigInt(dto.agentId)) {
+        throw new ForbiddenException(
+          'This request is not tied to your agent account.',
+        );
+      }
+      return { approvedByAgentId: BigInt(dto.agentId) };
+    }
+    if (dto.reviewerUsername) {
+      const reviewer = await this.prisma.account.findUnique({
+        where: { username: dto.reviewerUsername },
+      });
+      if (!reviewer) {
+        throw new NotFoundException('Reviewer account not found.');
+      }
+      return { reviewedBy: reviewer.id };
+    }
+    throw new BadRequestException(
+      'Either reviewerUsername or agentId is required.',
+    );
+  }
+
   async approve(id: string, dto: ResolveCashTransactionDto) {
     const tx = await this.prisma.cashTransaction.findUnique({
       where: { id: BigInt(id) },
@@ -197,12 +255,7 @@ export class TransactionsService {
         'This transaction has already been resolved.',
       );
     }
-    const reviewer = await this.prisma.account.findUnique({
-      where: { username: dto.reviewerUsername },
-    });
-    if (!reviewer) {
-      throw new NotFoundException('Reviewer account not found.');
-    }
+    const approver = await this.resolveApprover(tx, dto);
 
     await this.prisma.$transaction(async (db) => {
       if (tx.type === 'cash_in') {
@@ -228,8 +281,8 @@ export class TransactionsService {
         where: { id: tx.id },
         data: {
           status: 'completed',
-          reviewedBy: reviewer.id,
           reviewedAt: new Date(),
+          ...approver,
         },
       });
     });
@@ -248,19 +301,14 @@ export class TransactionsService {
         'This transaction has already been resolved.',
       );
     }
-    const reviewer = await this.prisma.account.findUnique({
-      where: { username: dto.reviewerUsername },
-    });
-    if (!reviewer) {
-      throw new NotFoundException('Reviewer account not found.');
-    }
+    const approver = await this.resolveApprover(tx, dto);
 
     await this.prisma.cashTransaction.update({
       where: { id: tx.id },
       data: {
         status: 'failed',
-        reviewedBy: reviewer.id,
         reviewedAt: new Date(),
+        ...approver,
       },
     });
     return { success: true };

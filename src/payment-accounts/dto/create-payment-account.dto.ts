@@ -1,10 +1,8 @@
 import {
   IsIn,
-  IsNumber,
+  IsNumberString,
   IsOptional,
   IsString,
-  Max,
-  Min,
   MinLength,
 } from 'class-validator';
 
@@ -19,6 +17,9 @@ export const PAYMENT_METHODS = [
 ] as const;
 
 export class CreatePaymentAccountDto {
+  @IsNumberString()
+  agentId: string;
+
   @IsIn(PAYMENT_METHODS)
   method: string;
 
@@ -37,30 +38,4 @@ export class CreatePaymentAccountDto {
   @IsOptional()
   @IsString()
   details?: string;
-
-  @IsOptional()
-  @IsString()
-  @MinLength(4)
-  password?: string;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  @Max(100)
-  commission?: number;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  accountLimit?: number;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  monthlyEarn?: number;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  monthlyCollect?: number;
 }
