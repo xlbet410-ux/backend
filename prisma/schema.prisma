@@ -157,14 +157,19 @@ model CashTransaction {
   // Transaction ID the player supplied for a cash-in, or the destination
   // account number they gave for a cash-out.
   reference  String?   @db.VarChar(150)
+  // Which agent payment account this request is tied to — for a cash-in,
+  // the exact account the player was shown and told to pay; for a
+  // cash-out, the account auto-assigned (by method) to fulfil it.
+  paymentAccountId BigInt? @map("payment_account_id")
   status     String    @default("pending") @db.VarChar(20)
   reviewedBy BigInt?   @map("reviewed_by")
   reviewedAt DateTime? @map("reviewed_at") @db.Timestamptz
   createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
   updatedAt  DateTime  @default(now()) @map("updated_at") @db.Timestamptz
 
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  reviewer Account? @relation(fields: [reviewedBy], references: [id], onDelete: SetNull)
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewer       Account?        @relation(fields: [reviewedBy], references: [id], onDelete: SetNull)
+  paymentAccount PaymentAccount? @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
 
   @@map("cash_transactions")
 }
@@ -208,6 +213,8 @@ model PaymentAccount {
   isActive       Boolean  @default(true) @map("is_active")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt      DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  cashTransactions CashTransaction[]
 
   @@map("payment_accounts")
 }

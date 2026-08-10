@@ -8,6 +8,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateCashTransactionDto } from './dto/create-cash-transaction.dto';
 import { ResolveCashTransactionDto } from './dto/resolve-cash-transaction.dto';
 
+type AgentAccount = { label: string; accountNumber: string } | null;
+
 type CashTransactionRow = {
   id: bigint;
   type: string;
@@ -18,6 +20,7 @@ type CashTransactionRow = {
   createdAt: Date;
   user: { fullName: string };
   reviewer: { username: string } | null;
+  paymentAccount: AgentAccount;
 };
 
 type MyCashTransactionRow = {
@@ -28,7 +31,14 @@ type MyCashTransactionRow = {
   reference: string | null;
   status: string;
   createdAt: Date;
+  paymentAccount: AgentAccount;
 };
+
+const ADMIN_INCLUDE = {
+  user: true,
+  reviewer: true,
+  paymentAccount: true,
+} as const;
 
 @Injectable()
 export class TransactionsService {
@@ -44,6 +54,8 @@ export class TransactionsService {
       status: row.status,
       createdAt: row.createdAt.toISOString(),
       reviewedBy: row.reviewer?.username ?? null,
+      agentLabel: row.paymentAccount?.label ?? null,
+      agentAccountNumber: row.paymentAccount?.accountNumber ?? null,
     };
   }
 
@@ -56,7 +68,31 @@ export class TransactionsService {
       amount: Number(row.amount),
       status: row.status,
       createdAt: row.createdAt.toISOString(),
+      agentLabel: row.paymentAccount?.label ?? null,
+      agentAccountNumber: row.paymentAccount?.accountNumber ?? null,
     };
+  }
+
+  // Resolves which agent payment account a request is tied to. A cash-in
+  // passes the exact account it showed the player (requestedId) so the
+  // record matches what they actually saw; a cash-out never has one to
+  // pass (the player picks no account when withdrawing) and always falls
+  // back to the first active account for the method.
+  private async resolvePaymentAccountId(
+    method: string,
+    requestedId?: string,
+  ): Promise<bigint | null> {
+    if (requestedId) {
+      const account = await this.prisma.paymentAccount.findUnique({
+        where: { id: BigInt(requestedId) },
+      });
+      if (account && account.method === method) return account.id;
+    }
+    const fallback = await this.prisma.paymentAccount.findFirst({
+      where: { method, isActive: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    return fallback?.id ?? null;
   }
 
   // A player's own deposit + withdrawal history, both types merged into one
@@ -65,6 +101,7 @@ export class TransactionsService {
   async findMine(userId: string) {
     const rows = await this.prisma.cashTransaction.findMany({
       where: { userId: BigInt(userId) },
+      include: { paymentAccount: true },
       orderBy: { createdAt: 'desc' },
     });
     return rows.map((r) => this.toMine(r));
@@ -73,7 +110,7 @@ export class TransactionsService {
   async findCashIn() {
     const rows = await this.prisma.cashTransaction.findMany({
       where: { type: 'cash_in' },
-      include: { user: true, reviewer: true },
+      include: ADMIN_INCLUDE,
       orderBy: { createdAt: 'desc' },
     });
     return rows.map((r) => this.toAdmin(r));
@@ -82,7 +119,7 @@ export class TransactionsService {
   async findCashOut() {
     const rows = await this.prisma.cashTransaction.findMany({
       where: { type: 'cash_out' },
-      include: { user: true, reviewer: true },
+      include: ADMIN_INCLUDE,
       orderBy: { createdAt: 'desc' },
     });
     return rows.map((r) => this.toAdmin(r));
@@ -91,6 +128,10 @@ export class TransactionsService {
   // Cash-in has no KYC/active gate — a brand new, unverified player can
   // still deposit; it's only withdrawals that require verification.
   async createCashIn(userId: string, dto: CreateCashTransactionDto) {
+    const paymentAccountId = await this.resolvePaymentAccountId(
+      dto.method,
+      dto.paymentAccountId,
+    );
     const tx = await this.prisma.cashTransaction.create({
       data: {
         userId: BigInt(userId),
@@ -98,8 +139,9 @@ export class TransactionsService {
         method: dto.method,
         amount: dto.amount,
         reference: dto.reference.trim(),
+        paymentAccountId,
       },
-      include: { user: true, reviewer: true },
+      include: ADMIN_INCLUDE,
     });
     return this.toAdmin(tx);
   }
@@ -128,6 +170,7 @@ export class TransactionsService {
       );
     }
 
+    const paymentAccountId = await this.resolvePaymentAccountId(dto.method);
     const tx = await this.prisma.cashTransaction.create({
       data: {
         userId: user.id,
@@ -135,8 +178,9 @@ export class TransactionsService {
         method: dto.method,
         amount: dto.amount,
         reference: dto.reference.trim(),
+        paymentAccountId,
       },
-      include: { user: true, reviewer: true },
+      include: ADMIN_INCLUDE,
     });
     return this.toAdmin(tx);
   }

@@ -1,4 +1,12 @@
-import { IsIn, IsNumber, IsString, Min, MinLength } from 'class-validator';
+import {
+  IsIn,
+  IsNumber,
+  IsNumberString,
+  IsOptional,
+  IsString,
+  Min,
+  MinLength,
+} from 'class-validator';
 
 export const CASH_METHODS = [
   'bkash',
@@ -22,4 +30,11 @@ export class CreateCashTransactionDto {
   @IsString()
   @MinLength(3)
   reference: string;
+
+  // The exact agent account the player was shown and told to pay (cash-in
+  // only) — if omitted, the backend falls back to auto-picking the first
+  // active account for the method.
+  @IsOptional()
+  @IsNumberString()
+  paymentAccountId?: string;
 }
