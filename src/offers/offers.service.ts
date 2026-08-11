@@ -227,6 +227,28 @@ export class OffersService {
     return { success: true };
   }
 
+  // Actually removes the row — the DB itself also enforces this via
+  // offer_claims' ON DELETE RESTRICT, but counting first gives a clearer
+  // error than surfacing a raw constraint violation.
+  async hardDeleteOffer(id: string) {
+    const existing = await this.prisma.offer.findUnique({
+      where: { id: BigInt(id) },
+    });
+    if (!existing) {
+      throw new NotFoundException('Offer not found.');
+    }
+    const claimCount = await this.prisma.offerClaim.count({
+      where: { offerId: existing.id },
+    });
+    if (claimCount > 0) {
+      throw new ConflictException(
+        `Can't permanently delete — ${claimCount} player claim${claimCount === 1 ? '' : 's'} ${claimCount === 1 ? 'references' : 'reference'} this offer. Deactivate it instead.`,
+      );
+    }
+    await this.prisma.offer.delete({ where: { id: existing.id } });
+    return { success: true };
+  }
+
   async toggleActive(id: string) {
     const existing = await this.prisma.offer.findUnique({
       where: { id: BigInt(id) },

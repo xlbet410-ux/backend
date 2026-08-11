@@ -74,6 +74,11 @@ export class OffersAdminController {
     return this.offersService.softDeleteOffer(id);
   }
 
+  @Delete(':id/permanent')
+  hardDelete(@Param('id') id: string) {
+    return this.offersService.hardDeleteOffer(id);
+  }
+
   @Post(':id/toggle')
   toggle(@Param('id') id: string) {
     return this.offersService.toggleActive(id);
