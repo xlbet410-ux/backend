@@ -556,3 +556,9 @@ export function sportsProviderOrderIndex(
   );
   return idx === undefined ? null : idx;
 }
+
+// IA's thumbnail/original URLs are always just the provider's base path
+// with no filename (confirmed 404 live), so every IA game shows a broken
+// card image. Rather than hide the games, push them to the end of the
+// Esports row/browse list instead of showing broken art first.
+export const ESPORTS_BROKEN_THUMBNAIL_PROVIDERS = new Set(['IA']);

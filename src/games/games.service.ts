@@ -29,6 +29,7 @@ import {
   pinnedHotGamesIndex,
   sportsProviderOrderIndex,
   SPORTS_ESPORTS_PROVIDER_OVERRIDE,
+  ESPORTS_BROKEN_THUMBNAIL_PROVIDERS,
 } from './category.util';
 
 const ORACLE_BASE_URL_DEFAULT = 'https://oraclegames.net/api';
@@ -479,6 +480,18 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
             (pinnedIndex(a.name, a.providerCode) ?? Infinity) -
             (pinnedIndex(b.name, b.providerCode) ?? Infinity),
         );
+      }
+
+      // Push known-broken-thumbnail providers (e.g. IA) to the end instead
+      // of hiding their games — the pinnedIndex mechanism above can only
+      // pull specific items forward, not push them back, so this is a
+      // separate stable partition.
+      if (category === 'esports') {
+        const isBrokenThumb = (g: (typeof all)[number]) =>
+          ESPORTS_BROKEN_THUMBNAIL_PROVIDERS.has(
+            g.providerCode.trim().toUpperCase(),
+          );
+        all = [...all.filter((g) => !isBrokenThumb(g)), ...all.filter(isBrokenThumb)];
       }
     }
 
