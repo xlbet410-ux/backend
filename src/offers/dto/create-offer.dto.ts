@@ -177,4 +177,30 @@ export class CreateOfferDto {
   @IsOptional()
   @IsInt()
   priority?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  showInPromotionsPage?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  showInPopup?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  popupPriority?: number;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  popupCtaTextBn?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  popupCtaTextEn?: string;
+
+  @IsOptional()
+  @IsString()
+  popupCtaLink?: string;
 }

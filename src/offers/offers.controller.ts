@@ -31,6 +31,13 @@ export class OffersController {
     return this.offersService.listForUser(undefined, category);
   }
 
+  // Public — the homepage popup shows to guests too, not just logged-in
+  // players.
+  @Get('popup')
+  popup() {
+    return this.offersService.getPopupOffers();
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get('applicable-for-deposit')
   applicableForDeposit(

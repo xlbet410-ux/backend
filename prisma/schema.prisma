@@ -333,6 +333,16 @@ model Offer {
 
   claimCount Int @default(0) @map("claim_count")
 
+  // Where this offer is allowed to appear — independent of isActive, so an
+  // offer can power a deposit-page trigger without ever being listed.
+  showInPromotionsPage Boolean @default(true) @map("show_in_promotions_page")
+  showInPopup          Boolean @default(false) @map("show_in_popup")
+  // Homepage popup only — bannerUrl above doubles as the popup's big image.
+  popupPriority  Int     @default(0) @map("popup_priority")
+  popupCtaTextBn String? @map("popup_cta_text_bn") @db.VarChar(50)
+  popupCtaTextEn String? @map("popup_cta_text_en") @db.VarChar(50)
+  popupCtaLink   String? @map("popup_cta_link") @db.VarChar(255)
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
 

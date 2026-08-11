@@ -103,6 +103,12 @@ export class OffersService {
       isActive: offer.isActive,
       priority: offer.priority,
       claimCount: offer.claimCount,
+      showInPromotionsPage: offer.showInPromotionsPage,
+      showInPopup: offer.showInPopup,
+      popupPriority: offer.popupPriority,
+      popupCtaTextBn: offer.popupCtaTextBn,
+      popupCtaTextEn: offer.popupCtaTextEn,
+      popupCtaLink: offer.popupCtaLink,
       createdAt: offer.createdAt.toISOString(),
       updatedAt: offer.updatedAt.toISOString(),
     };
@@ -366,6 +372,7 @@ export class OffersService {
     const offers = await this.prisma.offer.findMany({
       where: {
         isActive: true,
+        showInPromotionsPage: true,
         ...(category ? { category } : {}),
         OR: [{ startsAt: null }, { startsAt: { lte: now } }],
         AND: [{ OR: [{ endsAt: null }, { endsAt: { gte: now } }] }],
@@ -420,6 +427,34 @@ export class OffersService {
       });
     }
     return result;
+  }
+
+  /** Active, in-window offers flagged for the homepage popup, newest-priority first. */
+  async getPopupOffers() {
+    const now = new Date();
+    const offers = await this.prisma.offer.findMany({
+      where: {
+        isActive: true,
+        showInPopup: true,
+        OR: [{ startsAt: null }, { startsAt: { lte: now } }],
+        AND: [{ OR: [{ endsAt: null }, { endsAt: { gte: now } }] }],
+      },
+      orderBy: { popupPriority: 'desc' },
+    });
+
+    return offers.map((offer) => ({
+      id: offer.id.toString(),
+      slug: offer.slug,
+      titleBn: offer.titleBn,
+      titleEn: offer.titleEn,
+      descriptionBn: offer.descriptionBn,
+      descriptionEn: offer.descriptionEn,
+      bannerUrl: offer.bannerUrl,
+      imageUrl: offer.imageUrl,
+      popupCtaTextBn: offer.popupCtaTextBn,
+      popupCtaTextEn: offer.popupCtaTextEn,
+      popupCtaLink: offer.popupCtaLink,
+    }));
   }
 
   /** Offers a user could pick on the deposit page for a given amount. */
