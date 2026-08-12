@@ -12,6 +12,7 @@ import { randomBytes } from 'crypto';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { BonusService } from '../bonus/bonus.service';
+import { VipService } from '../vip/vip.service';
 import {
   CatalogGame,
   GAME_CATEGORIES,
@@ -68,6 +69,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly bonusService: BonusService,
+    private readonly vipService: VipService,
   ) {}
 
   onModuleInit(): void {
@@ -671,6 +673,17 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
         } catch (err) {
           this.logger.error(
             `Bonus turnover failed for user ${result.userId}: ${(err as Error).message}`,
+          );
+        }
+
+        try {
+          await this.vipService.recordBet(
+            result.userId,
+            new Prisma.Decimal(bet_amount),
+          );
+        } catch (err) {
+          this.logger.error(
+            `VIP bet tracking failed for user ${result.userId}: ${(err as Error).message}`,
           );
         }
       }

@@ -17,6 +17,7 @@ import { GamesModule } from './games/games.module';
 import { PaymentAccountsModule } from './payment-accounts/payment-accounts.module';
 import { TransactionsModule } from './transactions/transactions.module';
 import { AgentsModule } from './agents/agents.module';
+import { VipModule } from './vip/vip.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { AgentsModule } from './agents/agents.module';
     PaymentAccountsModule,
     TransactionsModule,
     AgentsModule,
+    VipModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

@@ -3,9 +3,10 @@ import { TransactionsController } from './transactions.controller';
 import { TransactionsService } from './transactions.service';
 import { OffersModule } from '../offers/offers.module';
 import { BonusModule } from '../bonus/bonus.module';
+import { VipModule } from '../vip/vip.module';
 
 @Module({
-  imports: [OffersModule, BonusModule],
+  imports: [OffersModule, BonusModule, VipModule],
   controllers: [TransactionsController],
   providers: [TransactionsService],
 })

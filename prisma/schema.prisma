@@ -30,10 +30,17 @@ model User {
   // Admin-controlled kill switch, independent of KYC status — see
   // CashTransaction for how this and KYC together gate withdrawals.
   isActive        Boolean  @default(true) @map("is_active")
-  // Plain admin-settable tiers for offer targeting — no automated VIP/tier
-  // system sets these yet; an admin edits them directly until one exists.
-  vipLevel        Int      @default(0) @map("vip_level")
-  agentTier       Int      @default(0) @map("agent_tier")
+  // Auto-calculated from real deposits/bets by VipService — see
+  // vip_tiers. agentTier stays plain/admin-only; no referral-tier system
+  // exists yet.
+  vipLevel        Int       @default(0) @map("vip_level")
+  agentTier       Int       @default(0) @map("agent_tier")
+  // Running totals VipService increments on every approved deposit / settled
+  // bet — an O(1) check against vip_tiers on each event beats re-aggregating
+  // CashTransaction/GameTransaction from scratch every time.
+  lifetimeDepositAmount Decimal   @default(0) @map("lifetime_deposit_amount") @db.Decimal(14, 2)
+  lifetimeBetAmount     Decimal   @default(0) @map("lifetime_bet_amount") @db.Decimal(14, 2)
+  vipUpgradedAt         DateTime? @map("vip_upgraded_at") @db.Timestamptz
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz
 
@@ -43,6 +50,7 @@ model User {
   cashTransactions CashTransaction[]
   offerClaims      OfferClaim[]
   bonusWallets     BonusWallet[]
+  vipUpgradeLogs   VipUpgradeLog[]
 
   @@map("users")
 }
@@ -403,9 +411,78 @@ model BonusWallet {
   metadata Json?
 
   user       User        @relation(fields: [userId], references: [id])
-  offerClaim OfferClaim?
+  offerClaim    OfferClaim?
+  vipUpgradeLog VipUpgradeLog?
 
   @@index([userId, status, claimedAt])
   @@index([status, expiresAt])
   @@map("bonus_wallets")
+}
+
+// Static config for the 51 VIP levels (0-50) — seeded once via
+// scripts/seed-vip-tiers.ts, edited afterward through the CRM. Held in
+// VipService's in-memory cache at runtime (rarely changes, same pattern as
+// the game catalog cache) rather than re-queried on every deposit/bet.
+model VipTier {
+  level     Int    @id
+  // 'Newcomer' | 'Bronze' | 'Silver' | 'Gold' | 'Platinum' | 'Diamond'
+  groupName String @map("group_name") @db.VarChar(30)
+  nameBn    String @map("name_bn") @db.VarChar(100)
+  nameEn    String @map("name_en") @db.VarChar(100)
+
+  // Both thresholds must be met (lifetime totals) to reach this level.
+  requiredDeposit Decimal @map("required_deposit") @db.Decimal(14, 2)
+  requiredBet     Decimal @map("required_bet") @db.Decimal(14, 2)
+
+  // Bonus auto-granted (as a BonusWallet, same FIFO/turnover mechanics as
+  // an offer claim) the moment a player crosses into this level.
+  bonusAmount        Decimal @default(0) @map("bonus_amount") @db.Decimal(14, 2)
+  turnoverMultiplier Decimal @default(1) @map("turnover_multiplier") @db.Decimal(5, 2)
+  bonusValidityDays  Int?    @map("bonus_validity_days")
+
+  // Perk metadata only, shown to admins/players as "what this level
+  // includes" — no referral-earnings or cashback payout engine exists in
+  // this codebase yet, so these numbers aren't paid out automatically.
+  referralSignupBonus      Decimal @default(0) @map("referral_signup_bonus") @db.Decimal(14, 2)
+  referralBetCommissionPct Decimal @default(0) @map("referral_bet_commission_pct") @db.Decimal(6, 4)
+  dailyCashbackPct         Decimal @default(0) @map("daily_cashback_pct") @db.Decimal(6, 4)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  upgrades VipUpgradeLog[]
+
+  @@map("vip_tiers")
+}
+
+// One row per level a player crosses (a single deposit/bet can jump several
+// levels at once — each gets its own row and, if the tier has one, its own
+// bonus grant).
+model VipUpgradeLog {
+  id     BigInt @id @default(autoincrement())
+  userId BigInt @map("user_id")
+
+  fromLevel Int @map("from_level")
+  toLevel   Int @map("to_level")
+
+  lifetimeDepositAtUpgrade Decimal @map("lifetime_deposit_at_upgrade") @db.Decimal(14, 2)
+  lifetimeBetAtUpgrade     Decimal @map("lifetime_bet_at_upgrade") @db.Decimal(14, 2)
+
+  bonusWalletId BigInt? @unique @map("bonus_wallet_id")
+
+  // Set when an admin manually moves a user's level instead of the
+  // automatic deposit/bet calculation reaching it on its own.
+  isManualOverride Boolean @default(false) @map("is_manual_override")
+  overrideReason   String? @map("override_reason")
+  overrideBy       String? @map("override_by") @db.VarChar(50)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user        User         @relation(fields: [userId], references: [id])
+  tier        VipTier      @relation(fields: [toLevel], references: [level])
+  bonusWallet BonusWallet? @relation(fields: [bonusWalletId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("vip_upgrade_logs")
 }

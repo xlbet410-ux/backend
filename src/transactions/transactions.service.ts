@@ -11,6 +11,7 @@ import { CreateCashTransactionDto } from './dto/create-cash-transaction.dto';
 import { ResolveCashTransactionDto } from './dto/resolve-cash-transaction.dto';
 import { OffersService } from '../offers/offers.service';
 import { BonusService } from '../bonus/bonus.service';
+import { VipService } from '../vip/vip.service';
 import { Prisma } from '../../generated/prisma/client';
 
 type AgentAccount = {
@@ -59,6 +60,7 @@ export class TransactionsService {
     private readonly prisma: PrismaService,
     private readonly offersService: OffersService,
     private readonly bonusService: BonusService,
+    private readonly vipService: VipService,
   ) {}
 
   private toAdmin(row: CashTransactionRow) {
@@ -307,6 +309,14 @@ export class TransactionsService {
     // otherwise-valid deposit/withdrawal approval.
     if (tx.type === 'cash_in') {
       await this.fireDepositTriggers(tx.userId, tx.amount, tx.offerId);
+
+      try {
+        await this.vipService.recordDeposit(tx.userId, tx.amount);
+      } catch (err) {
+        this.logger.error(
+          `VIP deposit tracking failed for user ${tx.userId}: ${(err as Error).message}`,
+        );
+      }
     }
 
     return { success: true };
