@@ -12,6 +12,8 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { OffersService } from '../offers/offers.service';
+import { ReferralService } from '../referral/referral.service';
+import { LoginStreakService } from '../login-streak/login-streak.service';
 
 const SALT_ROUNDS = 10;
 
@@ -23,6 +25,8 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly offersService: OffersService,
+    private readonly referralService: ReferralService,
+    private readonly loginStreakService: LoginStreakService,
   ) {}
 
   private async generateOwnReferralCode(): Promise<string> {
@@ -64,7 +68,7 @@ export class AuthService {
     };
   }
 
-  async register(dto: RegisterDto) {
+  async register(dto: RegisterDto, signupIp: string | null = null) {
     const existing = await this.prisma.user.findUnique({
       where: { phoneNumber: dto.phoneNumber },
     });
@@ -88,6 +92,10 @@ export class AuthService {
         agreedTerms: dto.agreedTerms,
       },
     });
+
+    // Resolves dto.referralCode against a real referrer and creates the
+    // tracking row — never blocks registration on failure.
+    await this.referralService.linkReferral(user.id, dto.referralCode, signupIp);
 
     // Never let a broken offer definition block registration.
     try {
@@ -122,6 +130,15 @@ export class AuthService {
     );
     if (!passwordMatches) {
       throw new UnauthorizedException('Invalid phone number or password.');
+    }
+
+    // Never let a streak-tracking bug block login.
+    try {
+      await this.loginStreakService.recordLogin(user.id);
+    } catch (err) {
+      this.logger.error(
+        `Login streak update failed for ${user.id}: ${(err as Error).message}`,
+      );
     }
 
     const token = await this.jwt.signAsync({

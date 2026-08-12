@@ -12,6 +12,7 @@ import { ResolveCashTransactionDto } from './dto/resolve-cash-transaction.dto';
 import { OffersService } from '../offers/offers.service';
 import { BonusService } from '../bonus/bonus.service';
 import { VipService } from '../vip/vip.service';
+import { ReferralService } from '../referral/referral.service';
 import { Prisma } from '../../generated/prisma/client';
 
 type AgentAccount = {
@@ -61,6 +62,7 @@ export class TransactionsService {
     private readonly offersService: OffersService,
     private readonly bonusService: BonusService,
     private readonly vipService: VipService,
+    private readonly referralService: ReferralService,
   ) {}
 
   private toAdmin(row: CashTransactionRow) {
@@ -198,14 +200,12 @@ export class TransactionsService {
         'Complete KYC verification before requesting a withdrawal.',
       );
     }
-    const canWithdraw = await this.bonusService.canWithdraw(user.id);
+    const canWithdraw = await this.bonusService.canWithdraw(
+      user.id,
+      new Prisma.Decimal(dto.amount),
+    );
     if (!canWithdraw.allowed) {
       throw new ForbiddenException(canWithdraw.reason);
-    }
-    if (Number(user.balance) < dto.amount) {
-      throw new ConflictException(
-        'Withdrawal amount exceeds your available balance.',
-      );
     }
 
     const paymentAccountId = await this.resolvePaymentAccountId(dto.method);
@@ -291,7 +291,10 @@ export class TransactionsService {
         }
         await db.user.update({
           where: { id: tx.userId },
-          data: { balance: { decrement: tx.amount } },
+          data: {
+            balance: { decrement: tx.amount },
+            lifetimeWithdrawnAmount: { increment: tx.amount },
+          },
         });
       }
       await db.cashTransaction.update({
@@ -315,6 +318,14 @@ export class TransactionsService {
       } catch (err) {
         this.logger.error(
           `VIP deposit tracking failed for user ${tx.userId}: ${(err as Error).message}`,
+        );
+      }
+
+      try {
+        await this.referralService.checkReferralMilestone(tx.userId);
+      } catch (err) {
+        this.logger.error(
+          `Referral milestone check failed for user ${tx.userId}: ${(err as Error).message}`,
         );
       }
     }

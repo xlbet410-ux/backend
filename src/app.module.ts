@@ -18,6 +18,8 @@ import { PaymentAccountsModule } from './payment-accounts/payment-accounts.modul
 import { TransactionsModule } from './transactions/transactions.module';
 import { AgentsModule } from './agents/agents.module';
 import { VipModule } from './vip/vip.module';
+import { ReferralModule } from './referral/referral.module';
+import { CashbackModule } from './cashback/cashback.module';
 
 @Module({
   imports: [
@@ -37,6 +39,8 @@ import { VipModule } from './vip/vip.module';
     TransactionsModule,
     AgentsModule,
     VipModule,
+    ReferralModule,
+    CashbackModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

@@ -41,8 +41,26 @@ model User {
   lifetimeDepositAmount Decimal   @default(0) @map("lifetime_deposit_amount") @db.Decimal(14, 2)
   lifetimeBetAmount     Decimal   @default(0) @map("lifetime_bet_amount") @db.Decimal(14, 2)
   vipUpgradedAt         DateTime? @map("vip_upgraded_at") @db.Timestamptz
+  // Running total of completed cash_out amounts — used alongside
+  // lifetimeDepositAmount to cap how much a player can withdraw while a
+  // bonus still has pending turnover (see TransactionsService.canWithdraw):
+  // withdrawable = min(balance, lifetimeDepositAmount - lifetimeWithdrawnAmount).
+  lifetimeWithdrawnAmount Decimal @default(0) @map("lifetime_withdrawn_amount") @db.Decimal(14, 2)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  // Admin kill switch for referral commission/signup-bonus eligibility,
+  // separate from the unrelated Agent entity (payment agents) — same
+  // simple-boolean pattern as isActive above.
+  referralEnabled Boolean @default(true) @map("referral_enabled")
+  lifetimeCommissionEarned Decimal @default(0) @map("lifetime_commission_earned") @db.Decimal(14, 2)
+
+  // Daily-login streak — plain counters, no separate "streak" table needed
+  // for the live value; LoginStreakLog below is history/audit only.
+  loginStreak        Int       @default(0) @map("login_streak")
+  longestLoginStreak Int       @default(0) @map("longest_login_streak")
+  lastLoginDate      DateTime? @map("last_login_date") @db.Date
+  totalLogins        Int       @default(0) @map("total_logins")
 
   conversations    Conversation[]
   kycVerification  KycVerification?
@@ -51,6 +69,12 @@ model User {
   offerClaims      OfferClaim[]
   bonusWallets     BonusWallet[]
   vipUpgradeLogs   VipUpgradeLog[]
+  referralsAsReferrer  Referral[]           @relation("Referrer")
+  referralAsReferred   Referral?            @relation("Referred")
+  commissionsEarned    ReferralCommission[] @relation("CommissionReferrer")
+  commissionsGenerated ReferralCommission[] @relation("CommissionReferred")
+  cashbackGrants       CashbackGrant[]
+  loginStreakLogs      LoginStreakLog[]
 
   @@map("users")
 }
@@ -413,6 +437,8 @@ model BonusWallet {
   user       User        @relation(fields: [userId], references: [id])
   offerClaim    OfferClaim?
   vipUpgradeLog VipUpgradeLog?
+  referral      Referral?
+  cashbackGrant CashbackGrant?
 
   @@index([userId, status, claimedAt])
   @@index([status, expiresAt])
@@ -485,4 +511,123 @@ model VipUpgradeLog {
   @@index([userId])
   @@index([createdAt])
   @@map("vip_upgrade_logs")
+}
+
+// One row per successfully-linked referral (User.referralCode entered at
+// signup, resolved against the referrer's User.ownReferralCode). The
+// signup-bonus milestone deliberately piggybacks on the existing VIP
+// auto-upgrade event instead of tracking its own deposit/bet thresholds —
+// see ReferralService.onReferredUserLeveledUp, called from
+// VipService.upgradeUserToLevel — so there's exactly one place in the app
+// that decides "has this player become real," not two.
+model Referral {
+  id         BigInt @id @default(autoincrement())
+  referrerId BigInt @map("referrer_id")
+  referredId BigInt @unique @map("referred_id")
+
+  referralCode String @map("referral_code") @db.VarChar(20)
+
+  // 'pending' | 'milestone_met' | 'fraud_flagged'
+  status               String    @default("pending") @db.VarChar(20)
+  signupBonusGrantedAt DateTime? @map("signup_bonus_granted_at")
+  bonusWalletId        BigInt?   @unique @map("bonus_wallet_id")
+
+  // IP-only anti-fraud snapshot at signup — cheap, always available on every
+  // request. Deliberately skips device fingerprinting (would need new
+  // client-side instrumentation the bet app doesn't have yet).
+  signupIp   String? @map("signup_ip") @db.VarChar(45)
+  fraudFlags Json?   @map("fraud_flags")
+
+  reviewedAt  DateTime? @map("reviewed_at") @db.Timestamptz
+  reviewedBy  String?   @map("reviewed_by") @db.VarChar(50)
+  reviewNotes String?   @map("review_notes")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  referrer    User         @relation("Referrer", fields: [referrerId], references: [id])
+  referred    User         @relation("Referred", fields: [referredId], references: [id])
+  bonusWallet BonusWallet? @relation(fields: [bonusWalletId], references: [id])
+  commissions ReferralCommission[]
+
+  @@index([referrerId])
+  @@index([status])
+  @@map("referrals")
+}
+
+// Audit log of bet-commission credits — commission is real, immediately
+// withdrawable money (per the product decision: no separate commission
+// wallet/turnover), so it's credited to User.balance directly in the same
+// transaction that creates this row, not staged through BonusWallet.
+model ReferralCommission {
+  id         BigInt @id @default(autoincrement())
+  referrerId BigInt @map("referrer_id")
+  referredId BigInt @map("referred_id")
+  referralId BigInt @map("referral_id")
+
+  sourceGameTransactionId BigInt  @map("source_game_transaction_id")
+  betAmount               Decimal @map("bet_amount") @db.Decimal(14, 2)
+  commissionRate          Decimal @map("commission_rate") @db.Decimal(6, 4)
+  commissionAmount        Decimal @map("commission_amount") @db.Decimal(14, 2)
+
+  // Snapshot — the rate itself can change later if the referrer's VIP level changes.
+  referrerVipLevelAtEvent Int @map("referrer_vip_level_at_event")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  referrer User     @relation("CommissionReferrer", fields: [referrerId], references: [id])
+  referred User     @relation("CommissionReferred", fields: [referredId], references: [id])
+  referral Referral @relation(fields: [referralId], references: [id])
+
+  @@index([referrerId, createdAt])
+  @@map("referral_commissions")
+}
+
+// One row per user per calendar day — the unique constraint is what makes
+// the daily cashback sweep idempotent (safe to re-run/retry without
+// double-granting). Unlike commission, cashback DOES carry turnover, so it
+// reuses the exact same BonusWallet-grant pattern as VIP/Offers instead of
+// inventing a new payout path.
+model CashbackGrant {
+  id              BigInt   @id @default(autoincrement())
+  userId          BigInt   @map("user_id")
+  calculationDate DateTime @map("calculation_date") @db.Date
+
+  netLoss        Decimal @map("net_loss") @db.Decimal(14, 2)
+  cashbackRate   Decimal @map("cashback_rate") @db.Decimal(6, 4)
+  cashbackAmount Decimal @map("cashback_amount") @db.Decimal(14, 2)
+
+  vipLevelAtCalculation Int     @map("vip_level_at_calculation")
+  bonusWalletId         BigInt? @unique @map("bonus_wallet_id")
+
+  totalBetPrevDay Decimal @map("total_bet_prev_day") @db.Decimal(14, 2)
+  totalWinPrevDay Decimal @map("total_win_prev_day") @db.Decimal(14, 2)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user        User         @relation(fields: [userId], references: [id])
+  bonusWallet BonusWallet? @relation(fields: [bonusWalletId], references: [id])
+
+  @@unique([userId, calculationDate])
+  @@index([calculationDate])
+  @@map("cashback_grants")
+}
+
+// Audit/history only — the live streak value lives on User itself
+// (loginStreak/longestLoginStreak/lastLoginDate), same split as
+// VipUpgradeLog (live value on User.vipLevel, history in its own table).
+model LoginStreakLog {
+  id     BigInt @id @default(autoincrement())
+  userId BigInt @map("user_id")
+
+  loginDate   DateTime @map("login_date") @db.Date
+  streakDay   Int      @map("streak_day")
+  isMilestone Boolean  @default(false) @map("is_milestone")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, loginDate])
+  @@map("login_streak_logs")
 }

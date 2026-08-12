@@ -59,6 +59,14 @@ export class OffersController {
     return this.bonusService.getUserBonuses(BigInt(req.user.userId));
   }
 
+  // Powers the wallet page's "locked (pending turnover)" section — shows
+  // how much is withdrawable right now vs. held back by an active bonus.
+  @UseGuards(JwtAuthGuard)
+  @Get('withdrawable')
+  withdrawable(@Req() req: { user: { userId: string } }) {
+    return this.bonusService.canWithdraw(BigInt(req.user.userId));
+  }
+
   @UseGuards(JwtAuthGuard)
   @Post('bonuses/:id/forfeit')
   forfeit(@Param('id') id: string, @Req() req: { user: { userId: string } }) {

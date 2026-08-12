@@ -13,6 +13,7 @@ import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { BonusService } from '../bonus/bonus.service';
 import { VipService } from '../vip/vip.service';
+import { ReferralService } from '../referral/referral.service';
 import {
   CatalogGame,
   GAME_CATEGORIES,
@@ -71,6 +72,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     private readonly config: ConfigService,
     private readonly bonusService: BonusService,
     private readonly vipService: VipService,
+    private readonly referralService: ReferralService,
   ) {}
 
   onModuleInit(): void {
@@ -654,7 +656,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
           where: { id: user.id },
           data: { balance: newBalance },
         });
-        await tx.gameTransaction.create({
+        const gameTransaction = await tx.gameTransaction.create({
           data: {
             userId: user.id,
             gameUid: game_uid,
@@ -666,7 +668,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
             balanceAfter: newBalance,
           },
         });
-        return { newBalance, userId: user.id };
+        return { newBalance, userId: user.id, gameTransactionId: gameTransaction.id };
       });
 
       // Bonus turnover runs after the bet/win balance update has already
@@ -693,6 +695,26 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
         } catch (err) {
           this.logger.error(
             `VIP bet tracking failed for user ${result.userId}: ${(err as Error).message}`,
+          );
+        }
+
+        try {
+          await this.referralService.checkReferralMilestone(result.userId);
+        } catch (err) {
+          this.logger.error(
+            `Referral milestone check failed for user ${result.userId}: ${(err as Error).message}`,
+          );
+        }
+
+        try {
+          await this.referralService.recordBetCommission(
+            result.userId,
+            new Prisma.Decimal(bet_amount),
+            result.gameTransactionId,
+          );
+        } catch (err) {
+          this.logger.error(
+            `Referral commission failed for user ${result.userId}: ${(err as Error).message}`,
           );
         }
       }

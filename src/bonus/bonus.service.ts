@@ -54,10 +54,23 @@ export class BonusService {
     }
   }
 
-  /** Withdrawal gate: blocked while any bonus still has pending turnover. */
-  async canWithdraw(userId: bigint): Promise<{
+  /**
+   * Withdrawal gate. While any bonus has pending turnover, a player can
+   * still withdraw their own deposited money — just not more than that,
+   * since once betting starts real and bonus money are pooled in a single
+   * balance and can't be told apart. "Their own money" is approximated as
+   * lifetime deposits minus lifetime withdrawals (both running counters),
+   * capped at whatever is actually in balance right now. With no bonus
+   * pending, the full balance is withdrawable, same as before this cap
+   * existed.
+   */
+  async canWithdraw(
+    userId: bigint,
+    requestedAmount?: Prisma.Decimal,
+  ): Promise<{
     allowed: boolean;
     reason?: string;
+    maxWithdrawable: string;
     pendingBonuses: Array<{
       id: string;
       type: string;
@@ -68,10 +81,13 @@ export class BonusService {
       daysLeft: number;
     }>;
   }> {
-    const active = await this.prisma.bonusWallet.findMany({
-      where: { userId, status: 'active', expiresAt: { gt: new Date() } },
-      orderBy: { claimedAt: 'asc' },
-    });
+    const [active, user] = await Promise.all([
+      this.prisma.bonusWallet.findMany({
+        where: { userId, status: 'active', expiresAt: { gt: new Date() } },
+        orderBy: { claimedAt: 'asc' },
+      }),
+      this.prisma.user.findUniqueOrThrow({ where: { id: userId } }),
+    ]);
 
     const pendingBonuses = active.map((b) => {
       const daysLeft = b.expiresAt
@@ -93,12 +109,36 @@ export class BonusService {
       };
     });
 
+    let maxWithdrawable = user.balance;
+    if (active.length > 0) {
+      // "Own money" = deposits + referral commission (both real, no-turnover
+      // money by design) minus what's already been withdrawn. Bonus money
+      // itself is never counted here — it isn't added to balance until its
+      // turnover completes in the first place.
+      const ownPrincipal = Prisma.Decimal.max(
+        0,
+        user.lifetimeDepositAmount
+          .add(user.lifetimeCommissionEarned)
+          .sub(user.lifetimeWithdrawnAmount),
+      );
+      maxWithdrawable = Prisma.Decimal.min(user.balance, ownPrincipal);
+    }
+
+    const allowed =
+      requestedAmount === undefined
+        ? maxWithdrawable.greaterThan(0)
+        : requestedAmount.lessThanOrEqualTo(maxWithdrawable) &&
+          requestedAmount.greaterThan(0);
+
     return {
-      allowed: active.length === 0,
+      allowed,
       reason:
-        active.length > 0
-          ? `You have ${active.length} active bonus(es) with pending turnover.`
-          : undefined,
+        !allowed && active.length > 0
+          ? `You have ${active.length} active bonus(es) with pending turnover. You can withdraw up to ৳${maxWithdrawable.toFixed(2)} of your own deposited funds until it completes.`
+          : !allowed
+            ? 'Withdrawal amount exceeds your available balance.'
+            : undefined,
+      maxWithdrawable: maxWithdrawable.toString(),
       pendingBonuses,
     };
   }

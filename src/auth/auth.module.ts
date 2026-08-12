@@ -5,10 +5,14 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { OffersModule } from '../offers/offers.module';
+import { ReferralModule } from '../referral/referral.module';
+import { LoginStreakModule } from '../login-streak/login-streak.module';
 
 @Module({
   imports: [
     OffersModule,
+    ReferralModule,
+    LoginStreakModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

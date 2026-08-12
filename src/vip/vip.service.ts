@@ -4,7 +4,7 @@ import { OffersService } from '../offers/offers.service';
 import { Prisma } from '../../generated/prisma/client';
 import { VIP_MAX_LEVEL, generateTier, type GeneratedTier } from './vip-constants';
 
-type VipTierRow = Prisma.VipTierGetPayload<object>;
+export type VipTierRow = Prisma.VipTierGetPayload<object>;
 type UserRow = Prisma.UserGetPayload<object>;
 
 function tierToPublic(t: VipTierRow) {
@@ -62,6 +62,15 @@ export class VipService implements OnModuleInit {
 
   private async getTiers(): Promise<VipTierRow[]> {
     return this.tiersCache ?? this.loadCache();
+  }
+
+  // Raw tier row (real Decimal fields) for cross-service use — Referral/
+  // Cashback services need referralSignupBonus/referralBetCommissionPct/
+  // dailyCashbackPct as numbers to compute with, not the JSON-stringified
+  // shape getAllTiers() returns for the API.
+  async getTierRow(level: number): Promise<VipTierRow | undefined> {
+    const tiers = await this.getTiers();
+    return tiers.find((t) => t.level === level);
   }
 
   async getAllTiers() {
