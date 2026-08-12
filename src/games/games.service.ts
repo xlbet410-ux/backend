@@ -31,6 +31,7 @@ import {
   sportsProviderOrderIndex,
   SPORTS_ESPORTS_PROVIDER_OVERRIDE,
   ESPORTS_BROKEN_THUMBNAIL_PROVIDERS,
+  hasBrokenThumbnail,
 } from './category.util';
 
 const ORACLE_BASE_URL_DEFAULT = 'https://oraclegames.net/api';
@@ -484,15 +485,23 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
-      // Push known-broken-thumbnail providers (e.g. IA) to the end instead
-      // of hiding their games — the pinnedIndex mechanism above can only
-      // pull specific items forward, not push them back, so this is a
-      // separate stable partition.
-      if (category === 'esports') {
-        const isBrokenThumb = (g: (typeof all)[number]) =>
-          ESPORTS_BROKEN_THUMBNAIL_PROVIDERS.has(
-            g.providerCode.trim().toUpperCase(),
-          );
+      // Push known-broken-thumbnail games to the end instead of hiding them
+      // — the pinnedIndex mechanism above can only pull specific items
+      // forward, not push them back, so this is a separate stable partition.
+      // Esports keys off a known-broken provider (IA); Live Casino keys off
+      // the actual URL shape (VIVO's table games 403 with no filename —
+      // see hasBrokenThumbnail), so its one working VIVO entry ("Game
+      // lobby") stays in its normal position.
+      const isBrokenThumb: ((g: (typeof all)[number]) => boolean) | null =
+        category === 'esports'
+          ? (g) =>
+              ESPORTS_BROKEN_THUMBNAIL_PROVIDERS.has(
+                g.providerCode.trim().toUpperCase(),
+              )
+          : category === 'live_casino'
+            ? hasBrokenThumbnail
+            : null;
+      if (isBrokenThumb) {
         all = [...all.filter((g) => !isBrokenThumb(g)), ...all.filter(isBrokenThumb)];
       }
     }

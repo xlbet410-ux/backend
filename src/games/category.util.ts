@@ -562,3 +562,24 @@ export function sportsProviderOrderIndex(
 // card image. Rather than hide the games, push them to the end of the
 // Esports row/browse list instead of showing broken art first.
 export const ESPORTS_BROKEN_THUMBNAIL_PROVIDERS = new Set(['IA']);
+
+// Same problem as IA above, but scoped to the URL shape rather than a whole
+// provider — VIVO's live-casino catalog has this for every table game
+// except its "Game lobby" entry, whose thumbnail is a real file (confirmed
+// live: the broken ones 403 with no filename after the provider segment,
+// e.g. "https://oraclegames.net/thumbnail/VIVO/"; the lobby's own
+// ".../VIVO/178312591955.webp" 200s). Checking the URL shape instead of
+// hardcoding VIVO keeps the one working VIVO game in its normal position
+// and self-heals if Oracle fixes more of them later.
+function lacksFilename(url: string): boolean {
+  const lastSegment = url.replace(/\/+$/, '').split('/').pop() ?? '';
+  return !/\.[a-z0-9]+$/i.test(lastSegment);
+}
+
+export function hasBrokenThumbnail(g: {
+  thumbnail: string;
+  original: string;
+}): boolean {
+  const img = g.thumbnail || g.original;
+  return !img || lacksFilename(img);
+}
