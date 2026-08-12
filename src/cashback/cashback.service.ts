@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { VipService } from '../vip/vip.service';
+import { NotificationService } from '../notification/notification.service';
 import { Prisma } from '../../generated/prisma/client';
 import { startOfUTCDay } from '../common/date.util';
 import {
@@ -18,6 +19,7 @@ export class CashbackService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly vipService: VipService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   onModuleInit(): void {
@@ -127,6 +129,10 @@ export class CashbackService implements OnModuleInit, OnModuleDestroy {
           totalWinPrevDay: stats.totalWin,
         },
       });
+    });
+
+    await this.notificationService.create(userId, 'daily_cashback', {
+      amount: cashbackAmount.toString(),
     });
 
     return true;

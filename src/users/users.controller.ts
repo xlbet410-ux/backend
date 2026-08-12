@@ -26,6 +26,11 @@ export class UsersController {
     return this.usersService.findOne(id);
   }
 
+  @Get(':id/history')
+  getHistory(@Param('id') id: string) {
+    return this.usersService.getFullHistory(id);
+  }
+
   @Patch(':id/active')
   setActive(@Param('id') id: string, @Body() dto: SetUserActiveDto) {
     return this.usersService.setActive(id, dto.isActive);

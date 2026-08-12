@@ -76,6 +76,25 @@ export class ChatService {
     return messages.map((m) => this.toPublicMessage(m, m.senderAccount?.username ?? null));
   }
 
+  /** Messenger-style unread badge count — agent replies the player hasn't opened yet. */
+  async getUnreadCountForPlayer(userId: string): Promise<number> {
+    const conversation = await this.prisma.conversation.findFirst({
+      where: { userId: BigInt(userId), status: 'open' },
+    });
+    if (!conversation) return 0;
+    return this.prisma.message.count({
+      where: { conversationId: conversation.id, senderType: 'agent', isRead: false },
+    });
+  }
+
+  /** Called when the player opens the chat panel — clears the badge. */
+  async markReadForPlayer(conversationId: string): Promise<void> {
+    await this.prisma.message.updateMany({
+      where: { conversationId: BigInt(conversationId), senderType: 'agent', isRead: false },
+      data: { isRead: true },
+    });
+  }
+
   async postPlayerMessage(userId: string, conversationId: string, body: string): Promise<PublicMessage> {
     await this.assertPlayerOwnsConversation(userId, conversationId);
 

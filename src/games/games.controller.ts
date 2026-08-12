@@ -22,6 +22,7 @@ import { SearchCatalogQueryDto } from './dto/search-catalog.dto';
 import { GetCategoryProvidersDto } from './dto/get-category-providers.dto';
 import { GetProviderCatalogDto } from './dto/get-provider-catalog.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 
 @Controller()
 export class GamesController {
@@ -45,8 +46,29 @@ export class GamesController {
     return this.gamesService.getLiveWins();
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Get('games/history')
+  getMyGameHistory(
+    @Req() req: { user: { userId: string } },
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.gamesService.getMyGameHistory(
+      BigInt(req.user.userId),
+      page ? Number(page) : undefined,
+      pageSize ? Number(pageSize) : undefined,
+    );
+  }
+
+  // Public route, but personalizes the Featured section for whoever happens
+  // to be logged in — OptionalJwtAuthGuard never rejects a guest/expired
+  // request, it just leaves req.user unset.
+  @UseGuards(OptionalJwtAuthGuard)
   @Get('games/catalog')
-  getCatalog(@Query() query: GetCatalogQueryDto) {
+  getCatalog(
+    @Req() req: { user?: { userId: string } },
+    @Query() query: GetCatalogQueryDto,
+  ) {
     return this.gamesService.getCatalogPage(
       query.category,
       query.page,
@@ -54,6 +76,7 @@ export class GamesController {
       query.tag,
       query.providerCode,
       query.sort,
+      req.user?.userId ? BigInt(req.user.userId) : undefined,
     );
   }
 

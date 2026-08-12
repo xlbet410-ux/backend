@@ -10,9 +10,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateCashTransactionDto } from './dto/create-cash-transaction.dto';
 import { ResolveCashTransactionDto } from './dto/resolve-cash-transaction.dto';
 import { OffersService } from '../offers/offers.service';
-import { BonusService } from '../bonus/bonus.service';
+import { BonusService, DEPOSIT_TURNOVER_TYPE } from '../bonus/bonus.service';
 import { VipService } from '../vip/vip.service';
 import { ReferralService } from '../referral/referral.service';
+import { NotificationService } from '../notification/notification.service';
 import { Prisma } from '../../generated/prisma/client';
 
 type AgentAccount = {
@@ -63,6 +64,7 @@ export class TransactionsService {
     private readonly bonusService: BonusService,
     private readonly vipService: VipService,
     private readonly referralService: ReferralService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   private toAdmin(row: CashTransactionRow) {
@@ -280,6 +282,19 @@ export class TransactionsService {
           where: { id: tx.userId },
           data: { balance: { increment: tx.amount } },
         });
+        // Every deposit carries its own 1x turnover requirement, stacking
+        // with whatever bonus turnover is also active — see BonusService
+        // for how this gates withdrawal and why it's excluded from the
+        // balance-credit step when it completes (already credited above).
+        await db.bonusWallet.create({
+          data: {
+            userId: tx.userId,
+            type: DEPOSIT_TURNOVER_TYPE,
+            amount: tx.amount,
+            turnoverRequired: tx.amount,
+            expiresAt: null,
+          },
+        });
       } else {
         const user = await db.user.findUniqueOrThrow({
           where: { id: tx.userId },
@@ -328,6 +343,14 @@ export class TransactionsService {
           `Referral milestone check failed for user ${tx.userId}: ${(err as Error).message}`,
         );
       }
+
+      await this.notificationService.create(tx.userId, 'deposit_approved', {
+        amount: tx.amount.toString(),
+      });
+    } else {
+      await this.notificationService.create(tx.userId, 'withdrawal_approved', {
+        amount: tx.amount.toString(),
+      });
     }
 
     return { success: true };
@@ -388,6 +411,13 @@ export class TransactionsService {
         ...approver,
       },
     });
+
+    if (tx.type === 'cash_out') {
+      await this.notificationService.create(tx.userId, 'withdrawal_rejected', {
+        amount: tx.amount.toString(),
+      });
+    }
+
     return { success: true };
   }
 }

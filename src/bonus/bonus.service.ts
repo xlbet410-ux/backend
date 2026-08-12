@@ -1,6 +1,28 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '../../generated/prisma/client';
+
+// A deposit's own 1x turnover requirement, created alongside every approved
+// cash_in (see TransactionsService.approve) — stands for "you must wager
+// your deposit once," stacking with whatever real bonus turnover is also
+// pending, exactly like the spec: deposit ৳500 (1x = ৳500) + signup bonus
+// ৳200 (3x = ৳600) = ৳1100 combined before any of it is withdrawable.
+export const DEPOSIT_TURNOVER_TYPE = 'deposit_turnover';
+
+// Real bonuses always carry an expiresAt; deposit-turnover entries never do
+// (the money is already the player's own, nothing to time out) — a plain
+// `expiresAt: { gt: now }` filter would silently exclude null forever, since
+// SQL null comparisons are never true. This treats null as "never expires."
+// A function, not a static object — must evaluate `new Date()` fresh on
+// every call, not once at module load.
+function activeExpiryFilter() {
+  return { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] };
+}
 
 @Injectable()
 export class BonusService {
@@ -13,13 +35,19 @@ export class BonusService {
    * oldest active, non-expired bonus for this user ever receives turnover.
    * Once it completes, its amount moves to the user's real balance and any
    * leftover bet amount rolls into the next-oldest bonus in the same call.
+   *
+   * 'deposit_turnover' entries are the exception to the balance-credit step:
+   * that money is the player's own deposit, already sitting in their real
+   * balance since the moment it was approved (see TransactionsService.
+   * approve) — this entry only exists to gate withdrawal until it's been
+   * wagered once, so completing it must NOT add it to balance a second time.
    */
   async processTurnover(userId: bigint, betAmount: Prisma.Decimal) {
     let remainingBet = betAmount;
 
     while (remainingBet.greaterThan(0)) {
       const oldest = await this.prisma.bonusWallet.findFirst({
-        where: { userId, status: 'active', expiresAt: { gt: new Date() } },
+        where: { userId, status: 'active', ...activeExpiryFilter() },
         orderBy: { claimedAt: 'asc' },
       });
       if (!oldest) break;
@@ -41,7 +69,7 @@ export class BonusService {
           },
         });
 
-        if (isComplete) {
+        if (isComplete && oldest.type !== DEPOSIT_TURNOVER_TYPE) {
           await tx.user.update({
             where: { id: userId },
             data: { balance: { increment: oldest.amount } },
@@ -55,14 +83,12 @@ export class BonusService {
   }
 
   /**
-   * Withdrawal gate. While any bonus has pending turnover, a player can
-   * still withdraw their own deposited money — just not more than that,
-   * since once betting starts real and bonus money are pooled in a single
-   * balance and can't be told apart. "Their own money" is approximated as
-   * lifetime deposits minus lifetime withdrawals (both running counters),
-   * capped at whatever is actually in balance right now. With no bonus
-   * pending, the full balance is withdrawable, same as before this cap
-   * existed.
+   * Withdrawal gate. Every deposit carries its own 1x turnover requirement
+   * (see DEPOSIT_TURNOVER_TYPE) alongside whatever real bonus turnover is
+   * also active, and ALL of it must clear before ANYTHING is withdrawable —
+   * e.g. a ৳500 deposit (1x = ৳500) plus a ৳200 signup bonus (3x = ৳600) is
+   * a combined ৳1100 that must be wagered first. Once every active entry is
+   * cleared, the full balance is withdrawable.
    */
   async canWithdraw(
     userId: bigint,
@@ -83,7 +109,7 @@ export class BonusService {
   }> {
     const [active, user] = await Promise.all([
       this.prisma.bonusWallet.findMany({
-        where: { userId, status: 'active', expiresAt: { gt: new Date() } },
+        where: { userId, status: 'active', ...activeExpiryFilter() },
         orderBy: { claimedAt: 'asc' },
       }),
       this.prisma.user.findUniqueOrThrow({ where: { id: userId } }),
@@ -109,35 +135,23 @@ export class BonusService {
       };
     });
 
-    let maxWithdrawable = user.balance;
-    if (active.length > 0) {
-      // "Own money" = deposits + referral commission (both real, no-turnover
-      // money by design) minus what's already been withdrawn. Bonus money
-      // itself is never counted here — it isn't added to balance until its
-      // turnover completes in the first place.
-      const ownPrincipal = Prisma.Decimal.max(
-        0,
-        user.lifetimeDepositAmount
-          .add(user.lifetimeCommissionEarned)
-          .sub(user.lifetimeWithdrawnAmount),
-      );
-      maxWithdrawable = Prisma.Decimal.min(user.balance, ownPrincipal);
-    }
+    const hasPending = active.length > 0;
+    const maxWithdrawable = hasPending ? new Prisma.Decimal(0) : user.balance;
 
-    const allowed =
-      requestedAmount === undefined
+    const allowed = hasPending
+      ? false
+      : requestedAmount === undefined
         ? maxWithdrawable.greaterThan(0)
-        : requestedAmount.lessThanOrEqualTo(maxWithdrawable) &&
-          requestedAmount.greaterThan(0);
+        : requestedAmount.greaterThan(0) &&
+          requestedAmount.lessThanOrEqualTo(maxWithdrawable);
 
     return {
       allowed,
-      reason:
-        !allowed && active.length > 0
-          ? `You have ${active.length} active bonus(es) with pending turnover. You can withdraw up to ৳${maxWithdrawable.toFixed(2)} of your own deposited funds until it completes.`
-          : !allowed
-            ? 'Withdrawal amount exceeds your available balance.'
-            : undefined,
+      reason: hasPending
+        ? `You have ${active.length} pending turnover requirement(s) (deposit and/or bonus) totalling ৳${active.reduce((sum, b) => sum.add(b.turnoverRequired.sub(b.turnoverDone)), new Prisma.Decimal(0)).toFixed(2)} left to wager before you can withdraw.`
+        : !allowed
+          ? 'Withdrawal amount exceeds your available balance.'
+          : undefined,
       maxWithdrawable: maxWithdrawable.toString(),
       pendingBonuses,
     };
@@ -150,6 +164,11 @@ export class BonusService {
     });
     if (!bonus) {
       throw new NotFoundException('Bonus not found or not active.');
+    }
+    if (bonus.type === DEPOSIT_TURNOVER_TYPE) {
+      throw new BadRequestException(
+        "This is your deposit's own turnover requirement, not a bonus — it can't be forfeited, only wagered off.",
+      );
     }
 
     await this.prisma.bonusWallet.update({
@@ -178,7 +197,7 @@ export class BonusService {
     });
 
     const active = bonuses.filter(
-      (b) => b.status === 'active' && b.expiresAt && b.expiresAt > new Date(),
+      (b) => b.status === 'active' && (!b.expiresAt || b.expiresAt > new Date()),
     );
 
     const toPublic = (b: (typeof bonuses)[number]) => ({

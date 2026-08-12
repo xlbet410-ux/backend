@@ -20,6 +20,7 @@ import { AgentsModule } from './agents/agents.module';
 import { VipModule } from './vip/vip.module';
 import { ReferralModule } from './referral/referral.module';
 import { CashbackModule } from './cashback/cashback.module';
+import { NotificationModule } from './notification/notification.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { CashbackModule } from './cashback/cashback.module';
     VipModule,
     ReferralModule,
     CashbackModule,
+    NotificationModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

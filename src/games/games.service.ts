@@ -319,6 +319,34 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /** Player's own bet-by-bet history — profile page "Game History" tab. */
+  async getMyGameHistory(userId: bigint, page = 1, pageSize = 30) {
+    const size = Math.min(pageSize, 100);
+    const [rows, total, catalog] = await Promise.all([
+      this.prisma.gameTransaction.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * size,
+        take: size,
+      }),
+      this.prisma.gameTransaction.count({ where: { userId } }),
+      this.ensureCatalog(),
+    ]);
+    const nameByUid = new Map(catalog.map((g) => [g.gameUid, g.name]));
+
+    return {
+      total,
+      games: rows.map((r) => ({
+        id: r.id.toString(),
+        gameName: nameByUid.get(r.gameUid) ?? r.gameUid,
+        betAmount: r.betAmount.toString(),
+        winAmount: r.winAmount.toString(),
+        net: r.winAmount.sub(r.betAmount).toString(),
+        createdAt: r.createdAt.toISOString(),
+      })),
+    };
+  }
+
   private async buildCatalog(): Promise<CatalogGame[]> {
     const started = Date.now();
     const [providers, featuredUids] = await Promise.all([
@@ -429,6 +457,63 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     return counts;
   }
 
+  /**
+   * This user's own gameUids, most-recently-played first, deduped (a game
+   * played 5 times shows once, at its most recent play). Resolved against
+   * the FULL catalog, not just the featured subset — a game this player
+   * actually played always qualifies for their personal Featured row even
+   * if it never cracked the platform-wide top 30.
+   */
+  private async getRecentlyPlayedGameUids(
+    userId: bigint,
+    limit: number,
+  ): Promise<string[]> {
+    const rows = await this.prisma.gameTransaction.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      select: { gameUid: true },
+      take: 100, // over-fetch to dedupe repeats down to `limit` distinct games
+    });
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+    for (const row of rows) {
+      if (seen.has(row.gameUid)) continue;
+      seen.add(row.gameUid);
+      ordered.push(row.gameUid);
+      if (ordered.length >= limit) break;
+    }
+    return ordered;
+  }
+
+  /**
+   * "Featured" is normally the same platform-wide top-played list for
+   * everyone (see getFeaturedGameUids). Logged-in, this puts that player's
+   * own most-recently-played games first instead — an easy way back to
+   * whatever they were just playing — then fills the rest with the usual
+   * platform-wide list, skipping anything already shown.
+   */
+  private async personalizeFeatured(
+    fullCatalog: CatalogGame[],
+    featuredSubset: CatalogGame[],
+    userId: bigint,
+  ): Promise<CatalogGame[]> {
+    const recentUids = await this.getRecentlyPlayedGameUids(userId, 12);
+    if (recentUids.length === 0) return featuredSubset;
+
+    const byUid = new Map(fullCatalog.map((g) => [g.gameUid, g]));
+    const seen = new Set<string>();
+    const personal: CatalogGame[] = [];
+    for (const uid of recentUids) {
+      const game = byUid.get(uid);
+      if (game) {
+        seen.add(uid);
+        personal.push(game);
+      }
+    }
+    const rest = featuredSubset.filter((g) => !seen.has(g.gameUid));
+    return [...personal, ...rest];
+  }
+
   async getCatalogPage(
     category: GameCategory,
     page: number,
@@ -436,6 +521,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     tag?: SubTag,
     providerCode?: string,
     sort?: 'name_asc' | 'name_desc' | 'featured',
+    userId?: bigint,
   ): Promise<{ games: CatalogGame[]; total: number }> {
     const games = await this.ensureCatalog();
     let all =
@@ -448,6 +534,16 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     if (providerCode) {
       const code = providerCode.trim().toUpperCase();
       all = all.filter((g) => g.providerCode.trim().toUpperCase() === code);
+    }
+
+    // Only applies to the plain, unfiltered Featured view — personalized
+    // picks are resolved against the full catalog (see personalizeFeatured),
+    // so they could disagree with an active tag/provider filter, and an
+    // explicit sort (the category page's A-Z / "Featured first" dropdown)
+    // is a deliberate user choice that overrides it, same as it already
+    // overrides the curated pinned order below.
+    if (category === 'featured' && userId && !sort && !tag && !providerCode) {
+      all = await this.personalizeFeatured(games, all, userId);
     }
 
     if (sort) {

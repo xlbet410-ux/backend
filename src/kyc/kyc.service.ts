@@ -13,6 +13,7 @@ import { SubmitKycDto } from './dto/submit-kyc.dto';
 import { VerifyKycDto } from './dto/verify-kyc.dto';
 import { RejectKycDto } from './dto/reject-kyc.dto';
 import { OffersService } from '../offers/offers.service';
+import { NotificationService } from '../notification/notification.service';
 
 // Deliberately NOT under the statically-served `uploads/` directory (see main.ts) —
 // these are government ID photos and selfies, so they must only ever be reachable
@@ -35,6 +36,7 @@ export class KycService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly offersService: OffersService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   private toMine(
@@ -199,6 +201,8 @@ export class KycService {
       },
     });
 
+    await this.notificationService.create(row.userId, 'kyc_approved');
+
     // Never let a broken offer definition block a real KYC approval.
     try {
       await this.offersService.processTrigger({
@@ -240,6 +244,11 @@ export class KycService {
         rejectReason: dto.reason,
       },
     });
+
+    await this.notificationService.create(row.userId, 'kyc_rejected', {
+      reason: dto.reason,
+    });
+
     return { success: true };
   }
 }

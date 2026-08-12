@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { OffersService } from '../offers/offers.service';
+import { NotificationService } from '../notification/notification.service';
 import { Prisma } from '../../generated/prisma/client';
 import { VIP_MAX_LEVEL, generateTier, type GeneratedTier } from './vip-constants';
 
@@ -32,6 +33,7 @@ export class VipService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly offersService: OffersService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   async onModuleInit() {
@@ -195,6 +197,12 @@ export class VipService implements OnModuleInit {
     });
 
     this.logger.log(`User ${user.id} VIP upgrade: ${fromLevel} -> ${tier.level}`);
+
+    await this.notificationService.create(user.id, 'vip_levelup', {
+      fromLevel,
+      toLevel: tier.level,
+      bonusAmount: tier.bonusAmount.greaterThan(0) ? tier.bonusAmount.toString() : undefined,
+    });
 
     // Best-effort: an admin-configured vip_levelup offer layering an extra
     // bonus on top must never fail the upgrade itself, which already happened above.

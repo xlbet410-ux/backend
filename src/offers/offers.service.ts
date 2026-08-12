@@ -12,6 +12,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '../../generated/prisma/client';
 import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
+import { NotificationService } from '../notification/notification.service';
 
 const UPLOAD_DIR = join(process.cwd(), 'uploads', 'offers');
 const ALLOWED_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
@@ -38,7 +39,10 @@ type OfferTrigger =
 
 @Injectable()
 export class OffersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationService: NotificationService,
+  ) {}
 
   // Re-encodes any uploaded offer image to webp (real, lossy compression —
   // not just a dimension check) and caps its dimensions. Returns the public
@@ -727,5 +731,12 @@ export class OffersService {
         },
       });
     });
+
+    if (rewardAmount.greaterThan(0)) {
+      await this.notificationService.create(trigger.userId, 'offer_bonus', {
+        amount: rewardAmount.toString(),
+        offerSlug: offer.slug,
+      });
+    }
   }
 }

@@ -26,7 +26,16 @@ export class ChatController {
   @Get(':id/messages')
   async getPlayerMessages(@Req() req: AuthedRequest, @Param('id') id: string) {
     await this.chatService.assertPlayerOwnsConversation(req.user.userId, id);
-    return this.chatService.getMessages(id);
+    const messages = await this.chatService.getMessages(id);
+    await this.chatService.markReadForPlayer(id);
+    return messages;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('unread-count')
+  async getUnreadCount(@Req() req: AuthedRequest) {
+    const count = await this.chatService.getUnreadCountForPlayer(req.user.userId);
+    return { count };
   }
 
   @UseGuards(JwtAuthGuard, ThrottlerGuard)

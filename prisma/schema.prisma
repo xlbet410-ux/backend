@@ -41,10 +41,10 @@ model User {
   lifetimeDepositAmount Decimal   @default(0) @map("lifetime_deposit_amount") @db.Decimal(14, 2)
   lifetimeBetAmount     Decimal   @default(0) @map("lifetime_bet_amount") @db.Decimal(14, 2)
   vipUpgradedAt         DateTime? @map("vip_upgraded_at") @db.Timestamptz
-  // Running total of completed cash_out amounts — used alongside
-  // lifetimeDepositAmount to cap how much a player can withdraw while a
-  // bonus still has pending turnover (see TransactionsService.canWithdraw):
-  // withdrawable = min(balance, lifetimeDepositAmount - lifetimeWithdrawnAmount).
+  // Running total of completed cash_out amounts — audit/stats counter,
+  // parallel to lifetimeDepositAmount. Withdrawal itself is gated purely by
+  // BonusService.canWithdraw (any active BonusWallet, including a deposit's
+  // own turnover requirement, blocks withdrawal entirely until cleared).
   lifetimeWithdrawnAmount Decimal @default(0) @map("lifetime_withdrawn_amount") @db.Decimal(14, 2)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz
@@ -75,6 +75,7 @@ model User {
   commissionsGenerated ReferralCommission[] @relation("CommissionReferred")
   cashbackGrants       CashbackGrant[]
   loginStreakLogs      LoginStreakLog[]
+  notifications        Notification[]
 
   @@map("users")
 }
@@ -630,4 +631,27 @@ model LoginStreakLog {
 
   @@unique([userId, loginDate])
   @@map("login_streak_logs")
+}
+
+// In-app notifications (VIP level-up, referral bonus, cashback, KYC/deposit/
+// withdrawal decisions, etc). No titleBn/titleEn columns — the bet app
+// renders bilingual text client-side from `type` + `metadata`, the same
+// pattern already used for VIP tier names and offer categories elsewhere.
+model Notification {
+  id     BigInt @id @default(autoincrement())
+  userId BigInt @map("user_id")
+
+  type     String @db.VarChar(40)
+  metadata Json?
+
+  isRead Boolean   @default(false) @map("is_read")
+  readAt DateTime? @map("read_at") @db.Timestamptz
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notifications")
 }

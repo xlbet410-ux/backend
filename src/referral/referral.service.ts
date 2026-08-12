@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { VipService } from '../vip/vip.service';
 import { OffersService } from '../offers/offers.service';
+import { NotificationService } from '../notification/notification.service';
 import { Prisma } from '../../generated/prisma/client';
 import {
   REFERRAL_MILESTONE_LEVEL,
@@ -18,6 +19,7 @@ export class ReferralService {
     private readonly prisma: PrismaService,
     private readonly vipService: VipService,
     private readonly offersService: OffersService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   /**
@@ -168,6 +170,13 @@ export class ReferralService {
     this.logger.log(
       `Referral milestone met: ${referral.referrerId} <- ${referredUserId}`,
     );
+
+    if (signupBonus.greaterThan(0)) {
+      await this.notificationService.create(referrer.id, 'referral_signup_bonus', {
+        amount: signupBonus.toString(),
+        referredName: referredUser.fullName,
+      });
+    }
 
     // Best-effort: an admin-configured referral_milestone offer can stack
     // extra reward on top — "tier" here is the referrer's total successful-

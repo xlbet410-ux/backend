@@ -12,6 +12,7 @@ type UserWithDetails = {
   agreedTerms: boolean;
   balance: unknown;
   isActive: boolean;
+  vipLevel: number;
   createdAt: Date;
   updatedAt: Date;
   kycVerification: { status: string } | null;
@@ -40,6 +41,7 @@ export class UsersService {
       agreedTerms: u.agreedTerms,
       balance: Number(u.balance),
       isActive: u.isActive,
+      vipLevel: u.vipLevel,
       kycStatus: u.kycVerification?.status ?? 'none',
       totalCashIn,
       totalCashOut,
@@ -91,6 +93,67 @@ export class UsersService {
       data: { isActive },
     });
     return { success: true };
+  }
+
+  // Full player-360 view for the CRM's user detail page — transactions,
+  // every bonus ever granted (VIP/offer/referral/cashback/deposit-turnover,
+  // all share the same BonusWallet table), and bet-by-bet game history.
+  // Capped at the most recent 100 of each — this is a review screen, not an
+  // export.
+  async getFullHistory(id: string) {
+    const userId = BigInt(id);
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    const [transactions, bonusWallets, gameTransactions] = await Promise.all([
+      this.prisma.cashTransaction.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      }),
+      this.prisma.bonusWallet.findMany({
+        where: { userId },
+        orderBy: { claimedAt: 'desc' },
+        take: 100,
+      }),
+      this.prisma.gameTransaction.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      }),
+    ]);
+
+    return {
+      transactions: transactions.map((t) => ({
+        id: t.id.toString(),
+        type: t.type,
+        method: t.method,
+        amount: t.amount.toString(),
+        status: t.status,
+        reference: t.reference,
+        createdAt: t.createdAt.toISOString(),
+      })),
+      bonusWallets: bonusWallets.map((b) => ({
+        id: b.id.toString(),
+        type: b.type,
+        amount: b.amount.toString(),
+        turnoverRequired: b.turnoverRequired.toString(),
+        turnoverDone: b.turnoverDone.toString(),
+        status: b.status,
+        claimedAt: b.claimedAt.toISOString(),
+        expiresAt: b.expiresAt?.toISOString() ?? null,
+      })),
+      gameTransactions: gameTransactions.map((g) => ({
+        id: g.id.toString(),
+        gameUid: g.gameUid,
+        betAmount: g.betAmount.toString(),
+        winAmount: g.winAmount.toString(),
+        net: g.winAmount.sub(g.betAmount).toString(),
+        createdAt: g.createdAt.toISOString(),
+      })),
+    };
   }
 
   async remove(id: string) {
