@@ -71,7 +71,17 @@ async function run() {
       priority: tier,
       showInPromotionsPage: true,
       showInPopup: false,
+      groupKey: 'referral-milestones',
     } as never);
+  }
+
+  // Fixup for rows created by an earlier version of this script (before
+  // groupKey existed) — always re-applied, not just on first creation.
+  for (const { tier } of MILESTONE_TIERS) {
+    const existing = await prisma.offer.findUnique({ where: { slug: `referral-milestone-${tier}` } });
+    if (existing && existing.groupKey !== 'referral-milestones') {
+      await offersService.updateOffer(existing.id.toString(), { groupKey: 'referral-milestones' } as never);
+    }
   }
 
   await createIfMissing({

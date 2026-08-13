@@ -68,6 +68,14 @@ export class UpdateOfferDto {
   termsEn?: string;
 
   @IsOptional()
+  @IsBoolean()
+  imageOnly?: boolean;
+
+  @IsOptional()
+  @IsString()
+  groupKey?: string;
+
+  @IsOptional()
   @IsIn(OFFER_CATEGORIES)
   category?: string;
 

@@ -180,6 +180,8 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
       bannerUrl: offer.bannerUrl,
       termsBn: offer.termsBn,
       termsEn: offer.termsEn,
+      imageOnly: offer.imageOnly,
+      groupKey: offer.groupKey,
       category: offer.category,
       triggerType: offer.triggerType,
       triggerConfig: offer.triggerConfig,
@@ -407,6 +409,10 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
         bannerUrl: existing.bannerUrl,
         termsBn: existing.termsBn,
         termsEn: existing.termsEn,
+        imageOnly: existing.imageOnly,
+        // Deliberately NOT copied: groupKey — a duplicate joining the same
+        // group silently (without the admin explicitly setting it) would
+        // just add a near-identical extra card to that group's "+N more".
         category: existing.category,
         triggerType: existing.triggerType,
         triggerConfig: existing.triggerConfig as
@@ -566,6 +572,8 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
         bannerUrl: offer.bannerUrl,
         termsBn: offer.termsBn,
         termsEn: offer.termsEn,
+        imageOnly: offer.imageOnly,
+        groupKey: offer.groupKey,
         category: offer.category,
         triggerType: offer.triggerType,
         rewardType: offer.rewardType,
@@ -577,6 +585,7 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
         bonusValidityDays: offer.bonusValidityDays,
         alreadyClaimed,
         eligible,
+        priority: offer.priority,
       });
     }
     return result;
@@ -606,6 +615,7 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
       imageUrl: offer.imageUrl,
       termsBn: offer.termsBn,
       termsEn: offer.termsEn,
+      imageOnly: offer.imageOnly,
       rewardType: offer.rewardType,
       rewardAmount: offer.rewardAmount?.toString() ?? null,
       rewardCap: offer.rewardCap?.toString() ?? null,

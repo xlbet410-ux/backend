@@ -92,6 +92,14 @@ export class CreateOfferDto {
   @IsString()
   termsEn?: string;
 
+  @IsOptional()
+  @IsBoolean()
+  imageOnly?: boolean;
+
+  @IsOptional()
+  @IsString()
+  groupKey?: string;
+
   @IsIn(OFFER_CATEGORIES)
   category: string;
 

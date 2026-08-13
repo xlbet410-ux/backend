@@ -329,6 +329,19 @@ model Offer {
   termsBn       String? @map("terms_bn")
   termsEn       String? @map("terms_en")
 
+  // When true, both the promotions-page card and the homepage popup render
+  // ONLY the uploaded image — no title/description/reward badge/CTA text,
+  // no padding around it. For a purely-graphic promo banner where the image
+  // itself already says everything.
+  imageOnly Boolean @default(false) @map("image_only")
+
+  // Offers sharing the same non-null groupKey collapse into a single card
+  // on the promotions page (the highest-priority one shown as the cover),
+  // with the rest revealed on click — e.g. the 12-tier referral milestone
+  // ladder shown as one "Referral Milestones" card instead of 12 separate
+  // ones. Null/unset = shown as its own standalone card (existing behavior).
+  groupKey String? @map("group_key") @db.VarChar(100)
+
   // 'deposit' | 'referral' | 'level' | 'daily' | 'cashback' | 'special'
   category String @db.VarChar(30)
 
