@@ -13,6 +13,7 @@ import { Prisma } from '../../generated/prisma/client';
 import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
 import { NotificationService } from '../notification/notification.service';
+import { BalanceService } from '../balance/balance.service';
 
 const UPLOAD_DIR = join(process.cwd(), 'uploads', 'offers');
 const ALLOWED_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
@@ -42,6 +43,7 @@ export class OffersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificationService: NotificationService,
+    private readonly balanceService: BalanceService,
   ) {}
 
   // Re-encodes any uploaded offer image to webp (real, lossy compression —
@@ -687,6 +689,14 @@ export class OffersService {
           },
         });
         bonusWalletId = bw.id;
+
+        // Credited to real balance immediately — the turnover requirement
+        // above still gates withdrawal (see BonusService.canWithdraw), it
+        // no longer gates whether the player can see/use the money.
+        await tx.user.update({
+          where: { id: trigger.userId },
+          data: { balance: { increment: rewardAmount } },
+        });
       }
 
       await tx.offerClaim.create({
@@ -733,6 +743,7 @@ export class OffersService {
     });
 
     if (rewardAmount.greaterThan(0)) {
+      this.balanceService.notifyChanged(trigger.userId);
       await this.notificationService.create(trigger.userId, 'offer_bonus', {
         amount: rewardAmount.toString(),
         offerSlug: offer.slug,

@@ -14,6 +14,7 @@ import { BonusService, DEPOSIT_TURNOVER_TYPE } from '../bonus/bonus.service';
 import { VipService } from '../vip/vip.service';
 import { ReferralService } from '../referral/referral.service';
 import { NotificationService } from '../notification/notification.service';
+import { BalanceService } from '../balance/balance.service';
 import { Prisma } from '../../generated/prisma/client';
 
 type AgentAccount = {
@@ -65,6 +66,7 @@ export class TransactionsService {
     private readonly vipService: VipService,
     private readonly referralService: ReferralService,
     private readonly notificationService: NotificationService,
+    private readonly balanceService: BalanceService,
   ) {}
 
   private toAdmin(row: CashTransactionRow) {
@@ -321,6 +323,8 @@ export class TransactionsService {
         },
       });
     });
+
+    this.balanceService.notifyChanged(tx.userId);
 
     // Offer triggers run after the approval itself has committed, and never
     // undo it — a bug in bonus-awarding must never block or roll back an

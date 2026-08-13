@@ -21,6 +21,7 @@ import { VipModule } from './vip/vip.module';
 import { ReferralModule } from './referral/referral.module';
 import { CashbackModule } from './cashback/cashback.module';
 import { NotificationModule } from './notification/notification.module';
+import { BalanceModule } from './balance/balance.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { NotificationModule } from './notification/notification.module';
     ReferralModule,
     CashbackModule,
     NotificationModule,
+    BalanceModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

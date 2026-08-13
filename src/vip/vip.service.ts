@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/com
 import { PrismaService } from '../prisma/prisma.service';
 import { OffersService } from '../offers/offers.service';
 import { NotificationService } from '../notification/notification.service';
+import { BalanceService } from '../balance/balance.service';
 import { Prisma } from '../../generated/prisma/client';
 import { VIP_MAX_LEVEL, generateTier, type GeneratedTier } from './vip-constants';
 
@@ -34,6 +35,7 @@ export class VipService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly offersService: OffersService,
     private readonly notificationService: NotificationService,
+    private readonly balanceService: BalanceService,
   ) {}
 
   async onModuleInit() {
@@ -177,6 +179,14 @@ export class VipService implements OnModuleInit {
           },
         });
         bonusWalletId = bw.id;
+
+        // Credited to real balance immediately — the turnover requirement
+        // above still gates withdrawal (see BonusService.canWithdraw), it
+        // no longer gates whether the player can see/use the money.
+        await tx.user.update({
+          where: { id: user.id },
+          data: { balance: { increment: tier.bonusAmount } },
+        });
       }
 
       await tx.vipUpgradeLog.create({
@@ -197,6 +207,10 @@ export class VipService implements OnModuleInit {
     });
 
     this.logger.log(`User ${user.id} VIP upgrade: ${fromLevel} -> ${tier.level}`);
+
+    if (tier.bonusAmount.greaterThan(0)) {
+      this.balanceService.notifyChanged(user.id);
+    }
 
     await this.notificationService.create(user.id, 'vip_levelup', {
       fromLevel,

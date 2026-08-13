@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { PrismaService } from '../prisma/prisma.service';
 import { VipService } from '../vip/vip.service';
 import { NotificationService } from '../notification/notification.service';
+import { BalanceService } from '../balance/balance.service';
 import { Prisma } from '../../generated/prisma/client';
 import { startOfUTCDay } from '../common/date.util';
 import {
@@ -20,6 +21,7 @@ export class CashbackService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly vipService: VipService,
     private readonly notificationService: NotificationService,
+    private readonly balanceService: BalanceService,
   ) {}
 
   onModuleInit(): void {
@@ -116,6 +118,13 @@ export class CashbackService implements OnModuleInit, OnModuleDestroy {
           },
         },
       });
+      // Credited to real balance immediately — the turnover requirement
+      // above still gates withdrawal (see BonusService.canWithdraw), it no
+      // longer gates whether the player can see/use the money.
+      await tx.user.update({
+        where: { id: userId },
+        data: { balance: { increment: cashbackAmount } },
+      });
       await tx.cashbackGrant.create({
         data: {
           userId,
@@ -131,6 +140,7 @@ export class CashbackService implements OnModuleInit, OnModuleDestroy {
       });
     });
 
+    this.balanceService.notifyChanged(userId);
     await this.notificationService.create(userId, 'daily_cashback', {
       amount: cashbackAmount.toString(),
     });

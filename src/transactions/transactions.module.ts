@@ -6,9 +6,10 @@ import { BonusModule } from '../bonus/bonus.module';
 import { VipModule } from '../vip/vip.module';
 import { ReferralModule } from '../referral/referral.module';
 import { NotificationModule } from '../notification/notification.module';
+import { BalanceModule } from '../balance/balance.module';
 
 @Module({
-  imports: [OffersModule, BonusModule, VipModule, ReferralModule, NotificationModule],
+  imports: [OffersModule, BonusModule, VipModule, ReferralModule, NotificationModule, BalanceModule],
   controllers: [TransactionsController],
   providers: [TransactionsService],
 })

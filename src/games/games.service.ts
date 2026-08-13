@@ -14,6 +14,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BonusService } from '../bonus/bonus.service';
 import { VipService } from '../vip/vip.service';
 import { ReferralService } from '../referral/referral.service';
+import { BalanceService } from '../balance/balance.service';
 import {
   CatalogGame,
   GAME_CATEGORIES,
@@ -73,6 +74,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     private readonly bonusService: BonusService,
     private readonly vipService: VipService,
     private readonly referralService: ReferralService,
+    private readonly balanceService: BalanceService,
   ) {}
 
   onModuleInit(): void {
@@ -776,6 +778,11 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
         });
         return { newBalance, userId: user.id, gameTransactionId: gameTransaction.id };
       });
+
+      // Instant wallet update in the bet app — this is a server-to-server
+      // Oracle webhook, so the player's own browser has no other way to
+      // learn their balance just changed until they reload.
+      this.balanceService.notifyChanged(result.userId);
 
       // Bonus turnover runs after the bet/win balance update has already
       // committed (never nested inside that transaction — BonusService opens

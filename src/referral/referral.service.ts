@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { VipService } from '../vip/vip.service';
 import { OffersService } from '../offers/offers.service';
 import { NotificationService } from '../notification/notification.service';
+import { BalanceService } from '../balance/balance.service';
 import { Prisma } from '../../generated/prisma/client';
 import {
   REFERRAL_MILESTONE_LEVEL,
@@ -20,6 +21,7 @@ export class ReferralService {
     private readonly vipService: VipService,
     private readonly offersService: OffersService,
     private readonly notificationService: NotificationService,
+    private readonly balanceService: BalanceService,
   ) {}
 
   /**
@@ -148,6 +150,13 @@ export class ReferralService {
             },
           },
         });
+        // Credited to real balance immediately — the turnover requirement
+        // above still gates withdrawal (see BonusService.canWithdraw), it
+        // no longer gates whether the player can see/use the money.
+        await tx.user.update({
+          where: { id: referrer.id },
+          data: { balance: { increment: signupBonus } },
+        });
         await tx.referral.update({
           where: { id: referral.id },
           data: {
@@ -157,6 +166,7 @@ export class ReferralService {
           },
         });
       });
+      this.balanceService.notifyChanged(referrer.id);
     } else {
       // No signup bonus configured for the referrer's current tier — still
       // mark the milestone met so it's not reprocessed, and so a manually
@@ -251,6 +261,7 @@ export class ReferralService {
         },
       });
     });
+    this.balanceService.notifyChanged(referrer.id);
   }
 
   async getReferralStats(userId: bigint) {

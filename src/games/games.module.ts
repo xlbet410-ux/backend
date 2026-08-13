@@ -4,9 +4,10 @@ import { GamesService } from './games.service';
 import { BonusModule } from '../bonus/bonus.module';
 import { VipModule } from '../vip/vip.module';
 import { ReferralModule } from '../referral/referral.module';
+import { BalanceModule } from '../balance/balance.module';
 
 @Module({
-  imports: [BonusModule, VipModule, ReferralModule],
+  imports: [BonusModule, VipModule, ReferralModule, BalanceModule],
   controllers: [GamesController],
   providers: [GamesService],
   exports: [GamesService],

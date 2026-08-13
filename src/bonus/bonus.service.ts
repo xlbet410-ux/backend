@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { BalanceService } from '../balance/balance.service';
 import { Prisma } from '../../generated/prisma/client';
 
 // A deposit's own 1x turnover requirement, created alongside every approved
@@ -28,19 +29,20 @@ function activeExpiryFilter() {
 export class BonusService {
   private readonly logger = new Logger(BonusService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly balanceService: BalanceService,
+  ) {}
 
   /**
    * Called on every real-money bet (Oracle callback). FIFO: only the single
-   * oldest active, non-expired bonus for this user ever receives turnover.
-   * Once it completes, its amount moves to the user's real balance and any
-   * leftover bet amount rolls into the next-oldest bonus in the same call.
-   *
-   * 'deposit_turnover' entries are the exception to the balance-credit step:
-   * that money is the player's own deposit, already sitting in their real
-   * balance since the moment it was approved (see TransactionsService.
-   * approve) — this entry only exists to gate withdrawal until it's been
-   * wagered once, so completing it must NOT add it to balance a second time.
+   * oldest active, non-expired bonus for this user ever receives turnover;
+   * any leftover bet amount rolls into the next-oldest bonus in the same
+   * call. Every bonus type's amount is credited to the user's real balance
+   * immediately at grant time (see ReferralService/VipService/OffersService/
+   * CashbackService, and TransactionsService.approve for deposits) — this
+   * only tracks progress toward the turnover requirement that gates
+   * withdrawal (see canWithdraw), it never touches balance itself.
    */
   async processTurnover(userId: bigint, betAmount: Prisma.Decimal) {
     let remainingBet = betAmount;
@@ -59,22 +61,13 @@ export class BonusService {
       const newDone = oldest.turnoverDone.add(contribution);
       const isComplete = newDone.greaterThanOrEqualTo(oldest.turnoverRequired);
 
-      await this.prisma.$transaction(async (tx) => {
-        await tx.bonusWallet.update({
-          where: { id: oldest.id },
-          data: {
-            turnoverDone: newDone,
-            status: isComplete ? 'completed' : 'active',
-            completedAt: isComplete ? new Date() : null,
-          },
-        });
-
-        if (isComplete && oldest.type !== DEPOSIT_TURNOVER_TYPE) {
-          await tx.user.update({
-            where: { id: userId },
-            data: { balance: { increment: oldest.amount } },
-          });
-        }
+      await this.prisma.bonusWallet.update({
+        where: { id: oldest.id },
+        data: {
+          turnoverDone: newDone,
+          status: isComplete ? 'completed' : 'active',
+          completedAt: isComplete ? new Date() : null,
+        },
       });
 
       remainingBet = remainingBet.sub(contribution);
@@ -171,10 +164,25 @@ export class BonusService {
       );
     }
 
-    await this.prisma.bonusWallet.update({
-      where: { id: bonusWalletId },
-      data: { status: 'forfeited', completedAt: new Date() },
+    // The bonus amount was credited to balance the moment it was granted
+    // (see e.g. ReferralService.checkReferralMilestone), so giving it up
+    // must claw that back — otherwise forfeiting would be a way to keep
+    // bonus money without ever completing its turnover. Clamped to whatever
+    // balance remains: if it's already been lost on real bets, there's
+    // nothing left to reclaim.
+    await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.findUniqueOrThrow({ where: { id: userId } });
+      const reclaim = Prisma.Decimal.min(bonus.amount, user.balance);
+      await tx.user.update({
+        where: { id: userId },
+        data: { balance: { decrement: reclaim } },
+      });
+      await tx.bonusWallet.update({
+        where: { id: bonusWalletId },
+        data: { status: 'forfeited', completedAt: new Date() },
+      });
     });
+    this.balanceService.notifyChanged(userId);
     return { success: true };
   }
 
