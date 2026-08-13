@@ -182,6 +182,7 @@ export class OffersService {
       data: {
         ...dto,
         triggerConfig: dto.triggerConfig as Prisma.InputJsonValue | undefined,
+        eligibleGames: dto.eligibleGames as Prisma.InputJsonValue | undefined,
         startsAt: dto.startsAt ? new Date(dto.startsAt) : undefined,
         endsAt: dto.endsAt ? new Date(dto.endsAt) : undefined,
       },
@@ -210,6 +211,7 @@ export class OffersService {
       data: {
         ...dto,
         triggerConfig: dto.triggerConfig as Prisma.InputJsonValue | undefined,
+        eligibleGames: dto.eligibleGames as Prisma.InputJsonValue | undefined,
         startsAt: dto.startsAt ? new Date(dto.startsAt) : undefined,
         endsAt: dto.endsAt ? new Date(dto.endsAt) : undefined,
       },
@@ -312,6 +314,7 @@ export class OffersService {
         turnoverMultiplier: existing.turnoverMultiplier,
         turnoverBase: existing.turnoverBase,
         bonusValidityDays: existing.bonusValidityDays,
+        eligibleGames: existing.eligibleGames as Prisma.InputJsonValue,
         totalBudget: existing.totalBudget,
         // Deliberately NOT copied: startsAt/endsAt (a duplicate shouldn't
         // silently inherit a schedule that's already passed), isActive
@@ -682,6 +685,7 @@ export class OffersService {
             amount: rewardAmount,
             turnoverRequired,
             expiresAt,
+            eligibleGames: offer.eligibleGames as Prisma.InputJsonValue,
             metadata: {
               offerId: offer.id.toString(),
               triggerType: trigger.type,

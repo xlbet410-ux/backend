@@ -356,6 +356,14 @@ model Offer {
   turnoverBase       String  @default("bonus") @map("turnover_base") @db.VarChar(20)
   bonusValidityDays  Int?    @default(30) @map("bonus_validity_days")
 
+  // Which games a bet must be placed on to count toward THIS bonus's
+  // turnover requirement — copied onto the granted BonusWallet row at claim
+  // time (see OffersService.applyOffer) so a later edit to the offer never
+  // changes an already-granted bonus's rules. Shape:
+  // { mode: 'all' } | { mode: 'category'; category: GameCategory } |
+  // { mode: 'specific'; games: { gameUid: string; name: string }[] }
+  eligibleGames Json @default("{\"mode\":\"all\"}") @map("eligible_games")
+
   totalBudget  Decimal? @map("total_budget") @db.Decimal(14, 2)
   totalClaimed Decimal  @default(0) @map("total_claimed") @db.Decimal(14, 2)
 
@@ -434,6 +442,13 @@ model BonusWallet {
   completedAt DateTime? @map("completed_at") @db.Timestamptz
 
   metadata Json?
+
+  // Snapshot of the granting Offer's eligibleGames at claim time — null for
+  // every non-offer bonus type (deposit_turnover, referral_signup_bonus,
+  // vip_level_*, daily_cashback), which stay unrestricted exactly as
+  // before. See BonusService.processTurnover for how this gates which bets
+  // count toward this specific bonus's turnover.
+  eligibleGames Json? @map("eligible_games")
 
   user       User        @relation(fields: [userId], references: [id])
   offerClaim    OfferClaim?

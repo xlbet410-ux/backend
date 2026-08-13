@@ -203,4 +203,11 @@ export class CreateOfferDto {
   @IsOptional()
   @IsString()
   popupCtaLink?: string;
+
+  // { mode: 'all' } | { mode: 'category'; category: GameCategory } |
+  // { mode: 'specific'; games: { gameUid: string; name: string }[] } —
+  // same loose Json validation as triggerConfig, shape enforced app-side.
+  @IsOptional()
+  @IsObject()
+  eligibleGames?: Record<string, unknown>;
 }

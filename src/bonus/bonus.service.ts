@@ -25,6 +25,29 @@ function activeExpiryFilter() {
   return { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] };
 }
 
+type EligibleGames =
+  | { mode: 'all' }
+  | { mode: 'category'; category: string }
+  | { mode: 'specific'; games: { gameUid: string; name: string }[] };
+
+// null (every non-offer bonus type: deposit_turnover, referral_signup_bonus,
+// vip_level_*, daily_cashback) means unrestricted — any game's bet counts.
+// An offer-granted bonus carries whatever the offer's eligibleGames was set
+// to at claim time (see OffersService.applyOffer).
+function isEligibleForGame(
+  eligibleGames: Prisma.JsonValue | null,
+  gameUid: string,
+  gameCategory: string | null,
+): boolean {
+  if (!eligibleGames || typeof eligibleGames !== 'object' || Array.isArray(eligibleGames)) {
+    return true;
+  }
+  const eg = eligibleGames as unknown as EligibleGames;
+  if (eg.mode === 'category') return gameCategory !== null && eg.category === gameCategory;
+  if (eg.mode === 'specific') return (eg.games ?? []).some((g) => g.gameUid === gameUid);
+  return true;
+}
+
 @Injectable()
 export class BonusService {
   private readonly logger = new Logger(BonusService.name);
@@ -35,34 +58,47 @@ export class BonusService {
   ) {}
 
   /**
-   * Called on every real-money bet (Oracle callback). FIFO: only the single
-   * oldest active, non-expired bonus for this user ever receives turnover;
-   * any leftover bet amount rolls into the next-oldest bonus in the same
-   * call. Every bonus type's amount is credited to the user's real balance
-   * immediately at grant time (see ReferralService/VipService/OffersService/
-   * CashbackService, and TransactionsService.approve for deposits) — this
-   * only tracks progress toward the turnover requirement that gates
-   * withdrawal (see canWithdraw), it never touches balance itself.
+   * Called on every real-money bet (Oracle callback). FIFO within whichever
+   * active bonuses are actually eligible for this bet's game: walks active
+   * bonuses oldest-first and applies the bet to the first one that accepts
+   * turnover from this gameUid/category (see isEligibleForGame) — a bonus
+   * restricted to e.g. Slots only just gets skipped over by a bet on a Live
+   * Casino game, rather than blocking every other bonus behind it in the
+   * queue. Any leftover bet amount rolls into the next eligible bonus in the
+   * same call, same as before. Every bonus type's amount is credited to the
+   * user's real balance immediately at grant time (see ReferralService/
+   * VipService/OffersService/CashbackService, and TransactionsService.
+   * approve for deposits) — this only tracks progress toward the turnover
+   * requirement that gates withdrawal (see canWithdraw), it never touches
+   * balance itself.
    */
-  async processTurnover(userId: bigint, betAmount: Prisma.Decimal) {
+  async processTurnover(
+    userId: bigint,
+    betAmount: Prisma.Decimal,
+    gameUid: string,
+    gameCategory: string | null,
+  ) {
     let remainingBet = betAmount;
 
     while (remainingBet.greaterThan(0)) {
-      const oldest = await this.prisma.bonusWallet.findFirst({
+      const active = await this.prisma.bonusWallet.findMany({
         where: { userId, status: 'active', ...activeExpiryFilter() },
         orderBy: { claimedAt: 'asc' },
       });
-      if (!oldest) break;
+      const target = active.find((b) =>
+        isEligibleForGame(b.eligibleGames, gameUid, gameCategory),
+      );
+      if (!target) break; // nothing active accepts turnover from this game
 
-      const remainingTurnover = oldest.turnoverRequired.sub(
-        oldest.turnoverDone,
+      const remainingTurnover = target.turnoverRequired.sub(
+        target.turnoverDone,
       );
       const contribution = Prisma.Decimal.min(remainingBet, remainingTurnover);
-      const newDone = oldest.turnoverDone.add(contribution);
-      const isComplete = newDone.greaterThanOrEqualTo(oldest.turnoverRequired);
+      const newDone = target.turnoverDone.add(contribution);
+      const isComplete = newDone.greaterThanOrEqualTo(target.turnoverRequired);
 
       await this.prisma.bonusWallet.update({
-        where: { id: oldest.id },
+        where: { id: target.id },
         data: {
           turnoverDone: newDone,
           status: isComplete ? 'completed' : 'active',

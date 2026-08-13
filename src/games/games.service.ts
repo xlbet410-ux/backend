@@ -790,9 +790,18 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       // balance response Oracle is waiting on for this bet.
       if (bet_amount && bet_amount > 0) {
         try {
+          // Resolves which category this game belongs to so a bonus
+          // restricted to e.g. Slots only accepts turnover from the right
+          // bets (see BonusService.processTurnover). ensureCatalog() is
+          // the same in-memory cache every other catalog lookup uses — no
+          // extra Oracle round-trip per bet.
+          const catalog = await this.ensureCatalog();
+          const category = catalog.find((g) => g.gameUid === game_uid)?.category ?? null;
           await this.bonusService.processTurnover(
             result.userId,
             new Prisma.Decimal(bet_amount),
+            game_uid,
+            category,
           );
         } catch (err) {
           this.logger.error(

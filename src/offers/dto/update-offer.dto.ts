@@ -185,4 +185,8 @@ export class UpdateOfferDto {
   @IsOptional()
   @IsString()
   popupCtaLink?: string;
+
+  @IsOptional()
+  @IsObject()
+  eligibleGames?: Record<string, unknown>;
 }
