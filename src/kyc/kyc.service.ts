@@ -14,6 +14,7 @@ import { VerifyKycDto } from './dto/verify-kyc.dto';
 import { RejectKycDto } from './dto/reject-kyc.dto';
 import { OffersService } from '../offers/offers.service';
 import { NotificationService } from '../notification/notification.service';
+import { OtpService } from '../otp/otp.service';
 
 // Deliberately NOT under the statically-served `uploads/` directory (see main.ts) —
 // these are government ID photos and selfies, so they must only ever be reachable
@@ -37,6 +38,7 @@ export class KycService {
     private readonly prisma: PrismaService,
     private readonly offersService: OffersService,
     private readonly notificationService: NotificationService,
+    private readonly otpService: OtpService,
   ) {}
 
   private toMine(
@@ -99,6 +101,12 @@ export class KycService {
   }
 
   async submit(userId: string, dto: SubmitKycDto, files: KycFiles) {
+    if (!this.otpService.wasRecentlyVerified(userId)) {
+      throw new BadRequestException(
+        'Please verify your phone number with an OTP code before submitting.',
+      );
+    }
+
     const front = files.front?.[0];
     const back = files.back?.[0];
     const selfie = files.selfie?.[0];

@@ -22,6 +22,8 @@ import { ReferralModule } from './referral/referral.module';
 import { CashbackModule } from './cashback/cashback.module';
 import { NotificationModule } from './notification/notification.module';
 import { BalanceModule } from './balance/balance.module';
+import { OtpModule } from './otp/otp.module';
+import { MessagingModule } from './messaging/messaging.module';
 
 @Module({
   imports: [
@@ -45,6 +47,8 @@ import { BalanceModule } from './balance/balance.module';
     CashbackModule,
     NotificationModule,
     BalanceModule,
+    OtpModule,
+    MessagingModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
