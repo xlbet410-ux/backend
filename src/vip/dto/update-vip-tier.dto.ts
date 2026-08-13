@@ -49,5 +49,20 @@ export class UpdateVipTierDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  referralBetCommissionPctTier2?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  referralBetCommissionPctTier3?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  referralDepositCommissionPct?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
   dailyCashbackPct?: number;
 }

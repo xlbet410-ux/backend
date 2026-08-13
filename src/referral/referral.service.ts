@@ -209,9 +209,12 @@ export class ReferralService {
   }
 
   /**
-   * Called after a real-money bet settles. Commission is real, immediately
+   * Called after a real-money bet settles. Pays up to 3 levels of upline:
+   * the direct (tier-1) referrer, then THEIR referrer (tier-2), then
+   * THEIRS (tier-3) — each at the rate of their OWN VIP tier, same
+   * convention as tier-1 already used. Commission is real, immediately
    * withdrawable money (no turnover — per the product decision, it's not a
-   * BonusWallet), so it's credited straight to the referrer's balance in
+   * BonusWallet), so it's credited straight to each referrer's balance in
    * the same transaction that logs it. Never throws — callers wrap this the
    * same way VipService.recordBet is wrapped.
    */
@@ -227,41 +230,163 @@ export class ReferralService {
     });
     if (!referral || referral.status === 'fraud_flagged') return;
 
+    const tierRates: Record<
+      'bet_tier1' | 'bet_tier2' | 'bet_tier3',
+      (tier: NonNullable<Awaited<ReturnType<VipService['getTierRow']>>>) => Prisma.Decimal
+    > = {
+      bet_tier1: (tier) => tier.referralBetCommissionPct,
+      bet_tier2: (tier) => tier.referralBetCommissionPctTier2,
+      bet_tier3: (tier) => tier.referralBetCommissionPctTier3,
+    };
+
+    let referredId = bettorUserId;
+    let upline: { id: bigint; referralId: bigint } | null = {
+      id: referral.referrerId,
+      referralId: referral.id,
+    };
+
+    for (const type of ['bet_tier1', 'bet_tier2', 'bet_tier3'] as const) {
+      if (!upline) break;
+      const currentReferralId = upline.referralId;
+      const referrer = await this.prisma.user.findUnique({
+        where: { id: upline.id },
+      });
+      // Defensive: a malformed/looped chain must never pay the same person
+      // twice for one bet.
+      if (!referrer || !referrer.referralEnabled || referrer.id === referredId) break;
+
+      const tier = await this.vipService.getTierRow(referrer.vipLevel);
+      const rate = tier ? tierRates[type](tier) : new Prisma.Decimal(0);
+      if (tier && rate.greaterThan(0)) {
+        const commissionAmount = betAmount.mul(rate);
+        if (commissionAmount.greaterThan(0)) {
+          try {
+            await this.prisma.$transaction(async (tx) => {
+              await tx.user.update({
+                where: { id: referrer.id },
+                data: {
+                  balance: { increment: commissionAmount },
+                  lifetimeCommissionEarned: { increment: commissionAmount },
+                },
+              });
+              // If this exact (gameTransactionId, type) pair was already
+              // paid — a retried/concurrent call — this throws P2002 and
+              // rolls back the balance increment above too (same
+              // transaction), instead of paying twice.
+              await tx.referralCommission.create({
+                data: {
+                  referrerId: referrer.id,
+                  referredId,
+                  referralId: currentReferralId,
+                  type,
+                  sourceGameTransactionId: gameTransactionId,
+                  betAmount,
+                  commissionRate: rate,
+                  commissionAmount,
+                  referrerVipLevelAtEvent: referrer.vipLevel,
+                },
+              });
+            });
+            this.balanceService.notifyChanged(referrer.id);
+          } catch (err) {
+            if (
+              !(
+                err instanceof Prisma.PrismaClientKnownRequestError &&
+                err.code === 'P2002'
+              )
+            ) {
+              throw err;
+            }
+            this.logger.log(
+              `${type} commission for game transaction ${gameTransactionId} already recorded — skipped duplicate.`,
+            );
+          }
+        }
+      }
+
+      // Walk up one more level: is THIS referrer themselves someone's
+      // referred user?
+      referredId = referrer.id;
+      const nextReferral = await this.prisma.referral.findUnique({
+        where: { referredId: referrer.id },
+      });
+      upline =
+        nextReferral && nextReferral.status !== 'fraud_flagged'
+          ? { id: nextReferral.referrerId, referralId: nextReferral.id }
+          : null;
+    }
+  }
+
+  /**
+   * Called on every approved deposit (not just the first) — a recurring
+   * commission to the direct referrer only (no multi-tier upline for
+   * deposits, matching the reference spec). Same real-money, no-turnover
+   * pattern as recordBetCommission. Never throws.
+   */
+  async recordDepositCommission(
+    depositorUserId: bigint,
+    depositAmount: Prisma.Decimal,
+    cashTransactionId: bigint,
+  ): Promise<void> {
+    if (depositAmount.lessThanOrEqualTo(0)) return;
+
+    const referral = await this.prisma.referral.findUnique({
+      where: { referredId: depositorUserId },
+    });
+    if (!referral || referral.status === 'fraud_flagged') return;
+
     const referrer = await this.prisma.user.findUnique({
       where: { id: referral.referrerId },
     });
     if (!referrer || !referrer.referralEnabled) return;
 
     const tier = await this.vipService.getTierRow(referrer.vipLevel);
-    if (!tier || tier.referralBetCommissionPct.lessThanOrEqualTo(0)) return;
+    if (!tier || tier.referralDepositCommissionPct.lessThanOrEqualTo(0)) return;
 
-    // referralBetCommissionPct is stored as a fraction (0.005 = 0.5%), not
-    // a whole percentage — same convention as VipTier's other pct fields.
-    const commissionAmount = betAmount.mul(tier.referralBetCommissionPct);
+    const commissionAmount = depositAmount.mul(tier.referralDepositCommissionPct);
     if (commissionAmount.lessThanOrEqualTo(0)) return;
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.user.update({
-        where: { id: referrer.id },
-        data: {
-          balance: { increment: commissionAmount },
-          lifetimeCommissionEarned: { increment: commissionAmount },
-        },
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: referrer.id },
+          data: {
+            balance: { increment: commissionAmount },
+            lifetimeCommissionEarned: { increment: commissionAmount },
+          },
+        });
+        // If this cash transaction already has a 'deposit' commission row
+        // — a retried/concurrent call — this throws P2002 and rolls back
+        // the balance increment above too (same transaction), instead of
+        // paying twice.
+        await tx.referralCommission.create({
+          data: {
+            referrerId: referrer.id,
+            referredId: depositorUserId,
+            referralId: referral.id,
+            type: 'deposit',
+            sourceCashTransactionId: cashTransactionId,
+            betAmount: depositAmount,
+            commissionRate: tier.referralDepositCommissionPct,
+            commissionAmount,
+            referrerVipLevelAtEvent: referrer.vipLevel,
+          },
+        });
       });
-      await tx.referralCommission.create({
-        data: {
-          referrerId: referrer.id,
-          referredId: bettorUserId,
-          referralId: referral.id,
-          sourceGameTransactionId: gameTransactionId,
-          betAmount,
-          commissionRate: tier.referralBetCommissionPct,
-          commissionAmount,
-          referrerVipLevelAtEvent: referrer.vipLevel,
-        },
-      });
-    });
-    this.balanceService.notifyChanged(referrer.id);
+      this.balanceService.notifyChanged(referrer.id);
+    } catch (err) {
+      if (
+        !(
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2002'
+        )
+      ) {
+        throw err;
+      }
+      this.logger.log(
+        `Deposit commission for cash transaction ${cashTransactionId} already recorded — skipped duplicate.`,
+      );
+    }
   }
 
   async getReferralStats(userId: bigint) {
@@ -295,6 +420,9 @@ export class ReferralService {
         vipLevel: user.vipLevel,
         referralSignupBonus: tier?.referralSignupBonus.toString() ?? '0',
         referralBetCommissionPct: tier?.referralBetCommissionPct.toString() ?? '0',
+        referralBetCommissionPctTier2: tier?.referralBetCommissionPctTier2.toString() ?? '0',
+        referralBetCommissionPctTier3: tier?.referralBetCommissionPctTier3.toString() ?? '0',
+        referralDepositCommissionPct: tier?.referralDepositCommissionPct.toString() ?? '0',
       },
       lifetimeCommissionEarned: user.lifetimeCommissionEarned.toString(),
       referrals: referrals.map((r) => ({
@@ -307,6 +435,7 @@ export class ReferralService {
       })),
       recentCommissions: recentCommissions.map((c) => ({
         id: c.id.toString(),
+        type: c.type,
         amount: c.commissionAmount.toString(),
         betAmount: c.betAmount.toString(),
         createdAt: c.createdAt.toISOString(),
@@ -411,6 +540,7 @@ export class ReferralService {
         referrerMemberId: c.referrer.memberId,
         referredName: c.referred.fullName,
         referredMemberId: c.referred.memberId,
+        type: c.type,
         betAmount: c.betAmount.toString(),
         commissionRate: c.commissionRate.toString(),
         commissionAmount: c.commissionAmount.toString(),

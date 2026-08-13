@@ -1,4 +1,6 @@
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsIn,
   IsISO8601,
@@ -34,13 +36,18 @@ export const OFFER_TRIGGER_TYPES = [
   'manual_claim',
 ] as const;
 
-export const OFFER_REWARD_TYPES = ['fixed', 'percentage', 'no_reward'] as const;
+export const OFFER_REWARD_TYPES = ['fixed', 'percentage', 'no_reward', 'random'] as const;
 
 export const OFFER_TURNOVER_BASES = [
   'bonus',
   'deposit_plus_bonus',
   'deposit_only',
 ] as const;
+
+// 'lifetime' (default) — maxClaimsPerUser counts a player's claims ever.
+// 'daily' — counts only today's claims, so maxClaimsPerUser=1 means "once
+// per calendar day" (e.g. a recurring daily lucky-envelope claim).
+export const OFFER_CLAIM_WINDOWS = ['lifetime', 'daily'] as const;
 
 export class CreateOfferDto {
   @IsString()
@@ -143,6 +150,18 @@ export class CreateOfferDto {
   @Min(0)
   rewardCap?: number;
 
+  // Only used when rewardType = 'random' — a fresh amount is picked
+  // uniformly between these two on every claim.
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  rewardMin?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  rewardMax?: number;
+
   @IsOptional()
   @IsNumber()
   @Min(0)
@@ -153,6 +172,10 @@ export class CreateOfferDto {
   turnoverBase?: string;
 
   @IsOptional()
+  @IsIn(OFFER_CLAIM_WINDOWS)
+  claimWindow?: string;
+
+  @IsOptional()
   @IsInt()
   @Min(1)
   bonusValidityDays?: number;
@@ -161,6 +184,31 @@ export class CreateOfferDto {
   @IsNumber()
   @Min(0)
   totalBudget?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  dailyBudgetCap?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  dailyClaimCap?: number;
+
+  // [{ amount: number; weight: number }, ...] — shape enforced app-side,
+  // same loose Json validation as triggerConfig/eligibleGames.
+  @IsOptional()
+  @IsArray()
+  rewardDistribution?: Record<string, unknown>[];
+
+  // Day-of-month values (1-31) this offer auto-recurs on, e.g. [1,11,21].
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(31)
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  @Max(31, { each: true })
+  recurringMonthDays?: number[];
 
   @IsOptional()
   @IsISO8601()

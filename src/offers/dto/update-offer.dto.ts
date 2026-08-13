@@ -1,4 +1,6 @@
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsIn,
   IsISO8601,
@@ -14,6 +16,7 @@ import {
 } from 'class-validator';
 import {
   OFFER_CATEGORIES,
+  OFFER_CLAIM_WINDOWS,
   OFFER_REWARD_TYPES,
   OFFER_TRIGGER_TYPES,
   OFFER_TURNOVER_BASES,
@@ -128,11 +131,25 @@ export class UpdateOfferDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  rewardMin?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  rewardMax?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
   turnoverMultiplier?: number;
 
   @IsOptional()
   @IsIn(OFFER_TURNOVER_BASES)
   turnoverBase?: string;
+
+  @IsOptional()
+  @IsIn(OFFER_CLAIM_WINDOWS)
+  claimWindow?: string;
 
   @IsOptional()
   @IsInt()
@@ -143,6 +160,31 @@ export class UpdateOfferDto {
   @IsNumber()
   @Min(0)
   totalBudget?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  dailyBudgetCap?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  dailyClaimCap?: number;
+
+  // [{ amount: number; weight: number }, ...] — shape enforced app-side,
+  // same loose Json validation as triggerConfig/eligibleGames.
+  @IsOptional()
+  @IsArray()
+  rewardDistribution?: Record<string, unknown>[];
+
+  // Day-of-month values (1-31) this offer auto-recurs on, e.g. [1,11,21].
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(31)
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  @Max(31, { each: true })
+  recurringMonthDays?: number[];
 
   @IsOptional()
   @IsISO8601()

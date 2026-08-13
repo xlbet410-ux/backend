@@ -10,20 +10,27 @@ type Group = {
   nameBn: string;
   minLevel: number;
   maxLevel: number;
-  // Perk metadata only — surfaced to admins/players, not paid out
-  // automatically (no referral-earnings or cashback engine exists yet).
+  // Referral/cashback perks — paid out automatically as real balance
+  // credit, see ReferralService and CashbackService.
   referralSignupBonus: number;
   referralBetCommissionPct: number;
+  // 2nd/3rd-level upline bet commission, each paid at that person's OWN
+  // tier rate — roughly 50%/25% of this group's own tier1 rate.
+  referralBetCommissionPctTier2: number;
+  referralBetCommissionPctTier3: number;
+  // Recurring commission on every deposit the referred player makes —
+  // flat across every group, matching the reference "flat, all levels" rate.
+  referralDepositCommissionPct: number;
   dailyCashbackPct: number;
 };
 
 export const VIP_GROUPS: Group[] = [
-  { name: 'Newcomer', nameBn: 'নতুন', minLevel: 0, maxLevel: 0, referralSignupBonus: 120, referralBetCommissionPct: 0.003, dailyCashbackPct: 0.01 },
-  { name: 'Bronze', nameBn: 'ব্রোঞ্জ', minLevel: 1, maxLevel: 2, referralSignupBonus: 160, referralBetCommissionPct: 0.005, dailyCashbackPct: 0.02 },
-  { name: 'Silver', nameBn: 'সিলভার', minLevel: 3, maxLevel: 5, referralSignupBonus: 200, referralBetCommissionPct: 0.008, dailyCashbackPct: 0.03 },
-  { name: 'Gold', nameBn: 'গোল্ড', minLevel: 6, maxLevel: 8, referralSignupBonus: 360, referralBetCommissionPct: 0.012, dailyCashbackPct: 0.04 },
-  { name: 'Platinum', nameBn: 'প্লাটিনাম', minLevel: 9, maxLevel: 18, referralSignupBonus: 420, referralBetCommissionPct: 0.018, dailyCashbackPct: 0.05 },
-  { name: 'Diamond', nameBn: 'ডায়মন্ড', minLevel: 19, maxLevel: 50, referralSignupBonus: 800, referralBetCommissionPct: 0.025, dailyCashbackPct: 0.07 },
+  { name: 'Newcomer', nameBn: 'নতুন', minLevel: 0, maxLevel: 0, referralSignupBonus: 120, referralBetCommissionPct: 0.003, referralBetCommissionPctTier2: 0.0015, referralBetCommissionPctTier3: 0.0007, referralDepositCommissionPct: 0.022, dailyCashbackPct: 0.01 },
+  { name: 'Bronze', nameBn: 'ব্রোঞ্জ', minLevel: 1, maxLevel: 2, referralSignupBonus: 160, referralBetCommissionPct: 0.005, referralBetCommissionPctTier2: 0.0025, referralBetCommissionPctTier3: 0.0012, referralDepositCommissionPct: 0.022, dailyCashbackPct: 0.02 },
+  { name: 'Silver', nameBn: 'সিলভার', minLevel: 3, maxLevel: 5, referralSignupBonus: 200, referralBetCommissionPct: 0.008, referralBetCommissionPctTier2: 0.0040, referralBetCommissionPctTier3: 0.0020, referralDepositCommissionPct: 0.022, dailyCashbackPct: 0.03 },
+  { name: 'Gold', nameBn: 'গোল্ড', minLevel: 6, maxLevel: 8, referralSignupBonus: 360, referralBetCommissionPct: 0.012, referralBetCommissionPctTier2: 0.0060, referralBetCommissionPctTier3: 0.0030, referralDepositCommissionPct: 0.022, dailyCashbackPct: 0.04 },
+  { name: 'Platinum', nameBn: 'প্লাটিনাম', minLevel: 9, maxLevel: 18, referralSignupBonus: 420, referralBetCommissionPct: 0.018, referralBetCommissionPctTier2: 0.0090, referralBetCommissionPctTier3: 0.0045, referralDepositCommissionPct: 0.022, dailyCashbackPct: 0.05 },
+  { name: 'Diamond', nameBn: 'ডায়মন্ড', minLevel: 19, maxLevel: 50, referralSignupBonus: 800, referralBetCommissionPct: 0.025, referralBetCommissionPctTier2: 0.0125, referralBetCommissionPctTier3: 0.0063, referralDepositCommissionPct: 0.022, dailyCashbackPct: 0.07 },
 ];
 
 export function getGroupForLevel(level: number): Group {
@@ -115,6 +122,9 @@ export type GeneratedTier = {
   bonusValidityDays: number;
   referralSignupBonus: number;
   referralBetCommissionPct: number;
+  referralBetCommissionPctTier2: number;
+  referralBetCommissionPctTier3: number;
+  referralDepositCommissionPct: number;
   dailyCashbackPct: number;
 };
 
@@ -153,6 +163,9 @@ export function generateTier(level: number): GeneratedTier {
     bonusValidityDays: getBonusValidityDays(level),
     referralSignupBonus: group.referralSignupBonus,
     referralBetCommissionPct: group.referralBetCommissionPct,
+    referralBetCommissionPctTier2: group.referralBetCommissionPctTier2,
+    referralBetCommissionPctTier3: group.referralBetCommissionPctTier3,
+    referralDepositCommissionPct: group.referralDepositCommissionPct,
     dailyCashbackPct: group.dailyCashbackPct,
   };
 }

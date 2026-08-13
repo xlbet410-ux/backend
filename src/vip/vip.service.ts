@@ -1,4 +1,10 @@
-import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { OffersService } from '../offers/offers.service';
 import { NotificationService } from '../notification/notification.service';
@@ -8,6 +14,14 @@ import { VIP_MAX_LEVEL, generateTier, type GeneratedTier } from './vip-constants
 
 export type VipTierRow = Prisma.VipTierGetPayload<object>;
 type UserRow = Prisma.UserGetPayload<object>;
+
+// Defense-in-depth: adminUpdateTier() already invalidates the in-memory
+// cache synchronously, so this periodic refresh isn't needed for the normal
+// CRM-driven update path. It exists to bound the damage of any future code
+// (a one-off script, a migration, a direct DB edit) that writes vip_tiers
+// without going through this service — such a write would otherwise stay
+// invisible to commission/cashback calculations indefinitely.
+const TIER_CACHE_REFRESH_MS = 5 * 60 * 1000;
 
 function tierToPublic(t: VipTierRow) {
   return {
@@ -22,14 +36,18 @@ function tierToPublic(t: VipTierRow) {
     bonusValidityDays: t.bonusValidityDays,
     referralSignupBonus: t.referralSignupBonus.toString(),
     referralBetCommissionPct: t.referralBetCommissionPct.toString(),
+    referralBetCommissionPctTier2: t.referralBetCommissionPctTier2.toString(),
+    referralBetCommissionPctTier3: t.referralBetCommissionPctTier3.toString(),
+    referralDepositCommissionPct: t.referralDepositCommissionPct.toString(),
     dailyCashbackPct: t.dailyCashbackPct.toString(),
   };
 }
 
 @Injectable()
-export class VipService implements OnModuleInit {
+export class VipService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(VipService.name);
   private tiersCache: VipTierRow[] | null = null;
+  private cacheRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -41,6 +59,13 @@ export class VipService implements OnModuleInit {
   async onModuleInit() {
     await this.ensureSeeded();
     await this.loadCache();
+    this.cacheRefreshTimer = setInterval(() => {
+      void this.loadCache();
+    }, TIER_CACHE_REFRESH_MS);
+  }
+
+  onModuleDestroy() {
+    if (this.cacheRefreshTimer) clearInterval(this.cacheRefreshTimer);
   }
 
   // Idempotent — only ever inserts when the table is empty, so redeploys and
@@ -247,6 +272,9 @@ export class VipService implements OnModuleInit {
       bonusValidityDays: number | null;
       referralSignupBonus: number;
       referralBetCommissionPct: number;
+      referralBetCommissionPctTier2: number;
+      referralBetCommissionPctTier3: number;
+      referralDepositCommissionPct: number;
       dailyCashbackPct: number;
     }>,
   ) {

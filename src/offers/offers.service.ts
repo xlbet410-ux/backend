@@ -2,7 +2,10 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { mkdir, writeFile } from 'fs/promises';
@@ -21,6 +24,11 @@ const ALLOWED_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'
 // shipping pixels past it. Re-encoding to webp is what actually shrinks
 // file size; the resize just caps the upper bound for oversized phone photos.
 const MAX_DIMENSION = 1600;
+// How often to re-check recurring offers (e.g. Members Day) for whether
+// their startsAt/endsAt window needs rolling forward to the next
+// occurrence — matches GamesService's established periodic-refresh pattern
+// elsewhere in this codebase (no new scheduler dependency needed).
+const RECURRING_OFFER_REFRESH_MS = 30 * 60 * 1000;
 
 type TriggerBase = { userId: bigint };
 type OfferTrigger =
@@ -39,12 +47,98 @@ type OfferTrigger =
   | (TriggerBase & { type: 'manual_claim'; offerId: bigint });
 
 @Injectable()
-export class OffersService {
+export class OffersService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(OffersService.name);
+  private recurringOfferTimer: ReturnType<typeof setInterval> | null = null;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificationService: NotificationService,
     private readonly balanceService: BalanceService,
   ) {}
+
+  onModuleInit(): void {
+    void this.refreshRecurringOffers();
+    this.recurringOfferTimer = setInterval(() => {
+      void this.refreshRecurringOffers();
+    }, RECURRING_OFFER_REFRESH_MS);
+  }
+
+  onModuleDestroy(): void {
+    if (this.recurringOfferTimer) clearInterval(this.recurringOfferTimer);
+  }
+
+  // Rolls startsAt/endsAt forward for any offer with recurringMonthDays set
+  // (e.g. Members Day's [1, 11, 21]) so it auto-covers "today" when today is
+  // one of those days, or the next upcoming one otherwise — no admin needs
+  // to hand-edit the schedule window every month. Only writes when the
+  // computed window actually differs from what's stored, so this is a
+  // no-op most ticks.
+  private async refreshRecurringOffers(): Promise<void> {
+    try {
+      const offers = await this.prisma.offer.findMany({
+        where: { isActive: true, recurringMonthDays: { not: Prisma.DbNull } },
+      });
+
+      const now = new Date();
+      for (const offer of offers) {
+        const days = this.parseMonthDays(offer.recurringMonthDays);
+        if (days.length === 0) continue;
+
+        const { start, end } = this.nextOccurrenceWindow(days, now);
+        const unchanged =
+          offer.startsAt?.getTime() === start.getTime() &&
+          offer.endsAt?.getTime() === end.getTime();
+        if (unchanged) continue;
+
+        await this.prisma.offer.update({
+          where: { id: offer.id },
+          data: { startsAt: start, endsAt: end },
+        });
+        this.logger.log(
+          `Rolled recurring offer "${offer.slug}" window to ${start.toISOString()} - ${end.toISOString()}`,
+        );
+      }
+    } catch (err) {
+      this.logger.error('Failed to refresh recurring offer windows', err);
+    }
+  }
+
+  private parseMonthDays(value: Prisma.JsonValue | null): number[] {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((v) => Number(v))
+      .filter((n) => Number.isInteger(n) && n >= 1 && n <= 31);
+  }
+
+  // Given e.g. [1, 11, 21] and "now": if today is one of those days, the
+  // window covers today (start-of-day to end-of-day); otherwise it covers
+  // the next configured day, rolling into next month if none remain in the
+  // current one.
+  private nextOccurrenceWindow(
+    monthDays: number[],
+    now: Date,
+  ): { start: Date; end: Date } {
+    const sorted = [...monthDays].sort((a, b) => a - b);
+    const dayOf = (year: number, month: number, day: number) => ({
+      start: new Date(year, month, day, 0, 0, 0, 0),
+      end: new Date(year, month, day, 23, 59, 59, 999),
+    });
+
+    const today = now.getDate();
+    if (sorted.includes(today)) {
+      return dayOf(now.getFullYear(), now.getMonth(), today);
+    }
+
+    const nextThisMonth = sorted.find((d) => d > today);
+    if (nextThisMonth !== undefined) {
+      return dayOf(now.getFullYear(), now.getMonth(), nextThisMonth);
+    }
+
+    const nextMonth = now.getMonth() === 11 ? 0 : now.getMonth() + 1;
+    const year = now.getMonth() === 11 ? now.getFullYear() + 1 : now.getFullYear();
+    return dayOf(year, nextMonth, sorted[0]);
+  }
 
   // Re-encodes any uploaded offer image to webp (real, lossy compression —
   // not just a dimension check) and caps its dimensions. Returns the public
@@ -99,11 +193,19 @@ export class OffersService {
       rewardType: offer.rewardType,
       rewardAmount: offer.rewardAmount?.toString() ?? null,
       rewardCap: offer.rewardCap?.toString() ?? null,
+      rewardMin: offer.rewardMin?.toString() ?? null,
+      rewardMax: offer.rewardMax?.toString() ?? null,
+      rewardDistribution: offer.rewardDistribution,
       turnoverMultiplier: offer.turnoverMultiplier.toString(),
       turnoverBase: offer.turnoverBase,
+      claimWindow: offer.claimWindow,
+      eligibleGames: offer.eligibleGames,
       bonusValidityDays: offer.bonusValidityDays,
       totalBudget: offer.totalBudget?.toString() ?? null,
       totalClaimed: offer.totalClaimed.toString(),
+      dailyBudgetCap: offer.dailyBudgetCap?.toString() ?? null,
+      dailyClaimCap: offer.dailyClaimCap,
+      recurringMonthDays: offer.recurringMonthDays,
       startsAt: offer.startsAt?.toISOString() ?? null,
       endsAt: offer.endsAt?.toISOString() ?? null,
       isActive: offer.isActive,
@@ -183,6 +285,10 @@ export class OffersService {
         ...dto,
         triggerConfig: dto.triggerConfig as Prisma.InputJsonValue | undefined,
         eligibleGames: dto.eligibleGames as Prisma.InputJsonValue | undefined,
+        rewardDistribution: dto.rewardDistribution as
+          Prisma.InputJsonValue | undefined,
+        recurringMonthDays: dto.recurringMonthDays as
+          Prisma.InputJsonValue | undefined,
         startsAt: dto.startsAt ? new Date(dto.startsAt) : undefined,
         endsAt: dto.endsAt ? new Date(dto.endsAt) : undefined,
       },
@@ -212,6 +318,10 @@ export class OffersService {
         ...dto,
         triggerConfig: dto.triggerConfig as Prisma.InputJsonValue | undefined,
         eligibleGames: dto.eligibleGames as Prisma.InputJsonValue | undefined,
+        rewardDistribution: dto.rewardDistribution as
+          Prisma.InputJsonValue | undefined,
+        recurringMonthDays: dto.recurringMonthDays as
+          Prisma.InputJsonValue | undefined,
         startsAt: dto.startsAt ? new Date(dto.startsAt) : undefined,
         endsAt: dto.endsAt ? new Date(dto.endsAt) : undefined,
       },
@@ -311,11 +421,20 @@ export class OffersService {
         rewardType: existing.rewardType,
         rewardAmount: existing.rewardAmount,
         rewardCap: existing.rewardCap,
+        rewardMin: existing.rewardMin,
+        rewardMax: existing.rewardMax,
+        rewardDistribution: existing.rewardDistribution as
+          Prisma.InputJsonValue | undefined,
         turnoverMultiplier: existing.turnoverMultiplier,
         turnoverBase: existing.turnoverBase,
+        claimWindow: existing.claimWindow,
         bonusValidityDays: existing.bonusValidityDays,
         eligibleGames: existing.eligibleGames as Prisma.InputJsonValue,
         totalBudget: existing.totalBudget,
+        dailyBudgetCap: existing.dailyBudgetCap,
+        dailyClaimCap: existing.dailyClaimCap,
+        recurringMonthDays: existing.recurringMonthDays as
+          Prisma.InputJsonValue | undefined,
         // Deliberately NOT copied: startsAt/endsAt (a duplicate shouldn't
         // silently inherit a schedule that's already passed), isActive
         // (starts off so an admin reviews it before it goes live).
@@ -423,7 +542,7 @@ export class OffersService {
       let alreadyClaimed = false;
       if (userId) {
         const claims = await this.prisma.offerClaim.count({
-          where: { offerId: offer.id, userId },
+          where: this.claimCountWhere(offer.id, userId, offer.claimWindow),
         });
         alreadyClaimed = claims >= offer.maxClaimsPerUser;
       }
@@ -452,6 +571,8 @@ export class OffersService {
         rewardType: offer.rewardType,
         rewardAmount: offer.rewardAmount?.toString() ?? null,
         rewardCap: offer.rewardCap?.toString() ?? null,
+        rewardMin: offer.rewardMin?.toString() ?? null,
+        rewardMax: offer.rewardMax?.toString() ?? null,
         turnoverMultiplier: offer.turnoverMultiplier.toString(),
         bonusValidityDays: offer.bonusValidityDays,
         alreadyClaimed,
@@ -488,6 +609,8 @@ export class OffersService {
       rewardType: offer.rewardType,
       rewardAmount: offer.rewardAmount?.toString() ?? null,
       rewardCap: offer.rewardCap?.toString() ?? null,
+      rewardMin: offer.rewardMin?.toString() ?? null,
+      rewardMax: offer.rewardMax?.toString() ?? null,
       popupCtaTextBn: offer.popupCtaTextBn,
       popupCtaTextEn: offer.popupCtaTextEn,
       popupCtaLink: offer.popupCtaLink,
@@ -523,7 +646,7 @@ export class OffersService {
         continue;
 
       const claims = await this.prisma.offerClaim.count({
-        where: { offerId: offer.id, userId },
+        where: this.claimCountWhere(offer.id, userId, offer.claimWindow),
       });
       if (claims >= offer.maxClaimsPerUser) continue;
 
@@ -575,6 +698,9 @@ export class OffersService {
       rewardType: string;
       rewardAmount: Prisma.Decimal | null;
       rewardCap: Prisma.Decimal | null;
+      rewardMin?: Prisma.Decimal | null;
+      rewardMax?: Prisma.Decimal | null;
+      rewardDistribution?: Prisma.JsonValue;
     },
     amount?: Prisma.Decimal,
   ): Prisma.Decimal {
@@ -588,7 +714,86 @@ export class OffersService {
       }
       return reward;
     }
+    if (offer.rewardType === 'random') {
+      const weighted = this.pickWeightedReward(offer.rewardDistribution);
+      if (weighted !== null) return weighted;
+
+      const min = offer.rewardMin ?? new Prisma.Decimal(0);
+      const max = offer.rewardMax ?? min;
+      if (max.lessThanOrEqualTo(min)) return min;
+      // Whole-taka granularity — a "৳100-999" style random envelope reward
+      // doesn't need paisa-level precision, and rounding to whole units
+      // keeps the displayed amount clean.
+      const span = max.sub(min).toNumber();
+      const roll = Math.floor(Math.random() * (span + 1));
+      return min.add(roll);
+    }
     return new Prisma.Decimal(0);
+  }
+
+  // Optional weighted prize table (e.g. mostly-small, rarely-big envelope
+  // amounts) — [{amount, weight}, ...]. Returns null (falls back to the
+  // uniform rewardMin/rewardMax range) when absent or malformed.
+  private pickWeightedReward(
+    distribution: Prisma.JsonValue | undefined,
+  ): Prisma.Decimal | null {
+    if (!Array.isArray(distribution) || distribution.length === 0) return null;
+
+    const entries: { amount: number; weight: number }[] = [];
+    for (const raw of distribution) {
+      if (typeof raw !== 'object' || raw === null) continue;
+      const amount = Number((raw as Record<string, unknown>).amount);
+      const weight = Number((raw as Record<string, unknown>).weight);
+      if (Number.isFinite(amount) && Number.isFinite(weight) && weight > 0) {
+        entries.push({ amount, weight });
+      }
+    }
+    if (entries.length === 0) return null;
+
+    const totalWeight = entries.reduce((sum, e) => sum + e.weight, 0);
+    let roll = Math.random() * totalWeight;
+    for (const entry of entries) {
+      if (roll < entry.weight) return new Prisma.Decimal(entry.amount);
+      roll -= entry.weight;
+    }
+    return new Prisma.Decimal(entries[entries.length - 1].amount);
+  }
+
+  private startOfToday(): Date {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+
+  // 'daily' claimWindow counts only today's claims (so maxClaimsPerUser=1
+  // means "once per calendar day"); 'lifetime' (default) counts every claim
+  // ever, unchanged from the original behavior.
+  private claimCountWhere(
+    offerId: bigint,
+    userId: bigint,
+    claimWindow: string,
+  ): Prisma.OfferClaimWhereInput {
+    if (claimWindow !== 'daily') return { offerId, userId };
+    return { offerId, userId, claimedAt: { gte: this.startOfToday() } };
+  }
+
+  // Today's cumulative claim count + amount distributed for an offer with a
+  // dailyBudgetCap/dailyClaimCap — resets implicitly at local midnight since
+  // it's a live query over claimedAt, not a stored counter that needs a
+  // cron to reset. See Offer.dailyBudgetCap/dailyClaimCap in schema.prisma.
+  private async todaysDistributed(
+    client: Prisma.TransactionClient | PrismaService,
+    offerId: bigint,
+  ): Promise<{ count: number; total: Prisma.Decimal }> {
+    const agg = await client.offerClaim.aggregate({
+      where: { offerId, claimedAt: { gte: this.startOfToday() } },
+      _count: { _all: true },
+      _sum: { rewardAmount: true },
+    });
+    return {
+      count: agg._count._all,
+      total: agg._sum.rewardAmount ?? new Prisma.Decimal(0),
+    };
   }
 
   private async matchesConditions(
@@ -614,9 +819,20 @@ export class OffersService {
       return false;
 
     const claims = await this.prisma.offerClaim.count({
-      where: { offerId: offer.id, userId: trigger.userId },
+      where: this.claimCountWhere(offer.id, trigger.userId, offer.claimWindow),
     });
     if (claims >= offer.maxClaimsPerUser) return false;
+
+    if (offer.dailyBudgetCap || offer.dailyClaimCap) {
+      const today = await this.todaysDistributed(this.prisma, offer.id);
+      if (offer.dailyClaimCap && today.count >= offer.dailyClaimCap)
+        return false;
+      if (
+        offer.dailyBudgetCap &&
+        today.total.greaterThanOrEqualTo(offer.dailyBudgetCap)
+      )
+        return false;
+    }
 
     if (trigger.type === 'nth_deposit') {
       const nth = (offer.triggerConfig as { nth?: number } | null)?.nth;
@@ -676,27 +892,63 @@ export class OffersService {
         throw new Error('Offer budget exhausted');
       }
 
+      // Re-verified here, inside the transaction, on top of the same check
+      // already done in matchesConditions before this ran — closes the race
+      // window between two concurrent claims both passing that first check
+      // before either one's claim row exists yet. This is the actual
+      // double-payment guard, not just the earlier pre-check.
+      const claimsSoFar = await tx.offerClaim.count({
+        where: this.claimCountWhere(offer.id, trigger.userId, offer.claimWindow),
+      });
+      if (claimsSoFar >= offer.maxClaimsPerUser) {
+        throw new Error('Already claimed');
+      }
+
+      // Same re-verification principle as the budget/claim checks above,
+      // applied to the daily-resetting caps (e.g. Red Envelope Rain's daily
+      // pool) — the pre-check in matchesConditions has the same race window
+      // between two concurrent claims.
+      if (currentOffer?.dailyClaimCap || currentOffer?.dailyBudgetCap) {
+        const today = await this.todaysDistributed(tx, offer.id);
+        if (
+          currentOffer.dailyClaimCap &&
+          today.count >= currentOffer.dailyClaimCap
+        ) {
+          throw new Error('Daily claim cap reached');
+        }
+        if (
+          currentOffer.dailyBudgetCap &&
+          today.total.add(rewardAmount).greaterThan(currentOffer.dailyBudgetCap)
+        ) {
+          throw new Error('Daily budget cap reached');
+        }
+      }
+
       let bonusWalletId: bigint | null = null;
       if (rewardAmount.greaterThan(0)) {
-        const bw = await tx.bonusWallet.create({
-          data: {
-            userId: trigger.userId,
-            type: offer.slug,
-            amount: rewardAmount,
-            turnoverRequired,
-            expiresAt,
-            eligibleGames: offer.eligibleGames as Prisma.InputJsonValue,
-            metadata: {
-              offerId: offer.id.toString(),
-              triggerType: trigger.type,
+        if (turnoverRequired.greaterThan(0)) {
+          const bw = await tx.bonusWallet.create({
+            data: {
+              userId: trigger.userId,
+              type: offer.slug,
+              amount: rewardAmount,
+              turnoverRequired,
+              expiresAt,
+              eligibleGames: offer.eligibleGames as Prisma.InputJsonValue,
+              metadata: {
+                offerId: offer.id.toString(),
+                triggerType: trigger.type,
+              },
             },
-          },
-        });
-        bonusWalletId = bw.id;
-
-        // Credited to real balance immediately — the turnover requirement
-        // above still gates withdrawal (see BonusService.canWithdraw), it
-        // no longer gates whether the player can see/use the money.
+          });
+          bonusWalletId = bw.id;
+        }
+        // Credited to real balance immediately — if there's a turnover
+        // requirement it still gates withdrawal via the BonusWallet above
+        // (see BonusService.canWithdraw), not whether the player can
+        // see/use the money. An offer with turnoverMultiplier=0 (real cash,
+        // no restrictions — e.g. a referral milestone bonus) skips the
+        // BonusWallet entirely and never locks anything.
         await tx.user.update({
           where: { id: trigger.userId },
           data: { balance: { increment: rewardAmount } },

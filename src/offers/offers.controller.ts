@@ -83,11 +83,30 @@ export class OffersController {
     if (!offer || offer.triggerType !== 'manual_claim') {
       throw new NotFoundException('This offer is not claimable.');
     }
+
+    // processTrigger() silently no-ops when the player isn't eligible (already
+    // claimed, budget exhausted, etc.) rather than throwing — so success here
+    // isn't proof a claim actually happened. Query for a claim row created
+    // during this exact call to know for sure, and to surface the actual
+    // reward amount (needed for the "how much did I win" reveal on a
+    // random-reward offer like Red Envelope Rain).
+    const before = new Date();
     await this.offersService.processTrigger({
       type: 'manual_claim',
       userId: BigInt(req.user.userId),
       offerId: offer.id,
     });
-    return { success: true };
+    const claim = await this.prisma.offerClaim.findFirst({
+      where: {
+        offerId: offer.id,
+        userId: BigInt(req.user.userId),
+        claimedAt: { gte: before },
+      },
+      orderBy: { claimedAt: 'desc' },
+    });
+    if (!claim) {
+      throw new BadRequestException("You're not eligible to claim this offer right now.");
+    }
+    return { success: true, rewardAmount: claim.rewardAmount.toString() };
   }
 }

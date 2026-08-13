@@ -348,6 +348,18 @@ export class TransactionsService {
         );
       }
 
+      try {
+        await this.referralService.recordDepositCommission(
+          tx.userId,
+          tx.amount,
+          tx.id,
+        );
+      } catch (err) {
+        this.logger.error(
+          `Deposit commission failed for user ${tx.userId}: ${(err as Error).message}`,
+        );
+      }
+
       await this.notificationService.create(tx.userId, 'deposit_approved', {
         amount: tx.amount.toString(),
       });

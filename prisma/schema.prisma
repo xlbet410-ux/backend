@@ -346,10 +346,15 @@ model Offer {
   isNewUsersOnly    Boolean  @default(false) @map("is_new_users_only")
   maxClaimsPerUser  Int      @default(1) @map("max_claims_per_user")
 
-  // 'fixed' | 'percentage' | 'no_reward'
+  // 'fixed' | 'percentage' | 'no_reward' | 'random'
   rewardType   String   @map("reward_type") @db.VarChar(30)
   rewardAmount Decimal? @map("reward_amount") @db.Decimal(14, 2)
   rewardCap    Decimal? @map("reward_cap") @db.Decimal(14, 2)
+  // Only used when rewardType = 'random' — a fresh random amount in
+  // [rewardMin, rewardMax] is picked on every claim (e.g. a "lucky envelope"
+  // that pays somewhere between ৳100 and ৳999).
+  rewardMin Decimal? @map("reward_min") @db.Decimal(14, 2)
+  rewardMax Decimal? @map("reward_max") @db.Decimal(14, 2)
 
   turnoverMultiplier Decimal @default(1) @map("turnover_multiplier") @db.Decimal(5, 2)
   // 'bonus' | 'deposit_plus_bonus' | 'deposit_only'
@@ -366,6 +371,37 @@ model Offer {
 
   totalBudget  Decimal? @map("total_budget") @db.Decimal(14, 2)
   totalClaimed Decimal  @default(0) @map("total_claimed") @db.Decimal(14, 2)
+
+  // Daily-resetting budget cap — when set, the budget check for a new claim
+  // is against TODAY's distributed total (sum of OfferClaim.rewardAmount
+  // since local midnight) instead of the lifetime totalBudget/totalClaimed
+  // pair above. Can be combined with totalBudget for "up to X per day, Y
+  // overall lifetime" — see OffersService.dailyDistributedWhere.
+  dailyBudgetCap Decimal? @map("daily_budget_cap") @db.Decimal(14, 2)
+  // Daily-resetting claim-COUNT cap across all players (distinct from
+  // maxClaimsPerUser, which is a per-player cap) — e.g. "first 1000
+  // envelopes each day." Checked against today's OfferClaim count.
+  dailyClaimCap Int? @map("daily_claim_cap")
+
+  // Optional weighted prize table for rewardType='random', e.g.
+  // [{"amount":50,"weight":40},{"amount":999,"weight":1}] — overrides the
+  // uniform [rewardMin,rewardMax] draw with specific amounts/odds. Null
+  // falls back to the existing uniform-range behavior.
+  rewardDistribution Json? @map("reward_distribution")
+
+  // Day-of-month values this offer auto-recurs on, e.g. [1,11,21] for
+  // Members Day. When non-empty, OffersService periodically rolls
+  // startsAt/endsAt forward to the next occurrence automatically so an
+  // admin never has to hand-edit the window every month. Empty/null = a
+  // one-off manually-scheduled window (existing behavior, unchanged).
+  recurringMonthDays Json? @map("recurring_month_days")
+
+  // 'lifetime' (default, existing behavior) — maxClaimsPerUser counts a
+  // player's claims of this offer ever. 'daily' — counts only claims made
+  // since the start of today, so e.g. maxClaimsPerUser=1 + claimWindow=
+  // 'daily' means "once per calendar day," for a recurring daily-claim
+  // offer like a lucky-envelope drop. See OffersService.matchesConditions.
+  claimWindow String @default("lifetime") @map("claim_window") @db.VarChar(20)
 
   startsAt DateTime? @map("starts_at") @db.Timestamptz
   endsAt   DateTime? @map("ends_at") @db.Timestamptz
@@ -482,11 +518,21 @@ model VipTier {
   turnoverMultiplier Decimal @default(1) @map("turnover_multiplier") @db.Decimal(5, 2)
   bonusValidityDays  Int?    @map("bonus_validity_days")
 
-  // Perk metadata only, shown to admins/players as "what this level
-  // includes" — no referral-earnings or cashback payout engine exists in
-  // this codebase yet, so these numbers aren't paid out automatically.
+  // Referral/cashback perks, paid out automatically as real balance credit —
+  // see ReferralService.checkReferralMilestone / recordBetCommission /
+  // recordDepositCommission, and CashbackService.grantForUser.
   referralSignupBonus      Decimal @default(0) @map("referral_signup_bonus") @db.Decimal(14, 2)
+  // Direct (tier-1) referral's own bet commission rate.
   referralBetCommissionPct Decimal @default(0) @map("referral_bet_commission_pct") @db.Decimal(6, 4)
+  // 2nd/3rd-level upline bet commission — each paid at the RATE OF THAT
+  // PERSON'S OWN VIP tier (same convention as tier-1), not the original
+  // bettor's tier. See ReferralService.recordBetCommission.
+  referralBetCommissionPctTier2 Decimal @default(0) @map("referral_bet_commission_pct_tier2") @db.Decimal(6, 4)
+  referralBetCommissionPctTier3 Decimal @default(0) @map("referral_bet_commission_pct_tier3") @db.Decimal(6, 4)
+  // Recurring commission paid to the direct referrer on EVERY approved
+  // deposit their referred player makes (not just the first) — separate
+  // from the one-time referralSignupBonus milestone.
+  referralDepositCommissionPct Decimal @default(0) @map("referral_deposit_commission_pct") @db.Decimal(6, 4)
   dailyCashbackPct         Decimal @default(0) @map("daily_cashback_pct") @db.Decimal(6, 4)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -571,17 +617,27 @@ model Referral {
   @@map("referrals")
 }
 
-// Audit log of bet-commission credits — commission is real, immediately
-// withdrawable money (per the product decision: no separate commission
-// wallet/turnover), so it's credited to User.balance directly in the same
-// transaction that creates this row, not staged through BonusWallet.
+// Audit log of every referral commission credit — bet (tier 1-3) and
+// deposit commission alike. Commission is real, immediately withdrawable
+// money (per the product decision: no separate commission wallet/turnover),
+// so it's credited to User.balance directly in the same transaction that
+// creates this row, not staged through BonusWallet.
 model ReferralCommission {
   id         BigInt @id @default(autoincrement())
   referrerId BigInt @map("referrer_id")
   referredId BigInt @map("referred_id")
   referralId BigInt @map("referral_id")
 
-  sourceGameTransactionId BigInt  @map("source_game_transaction_id")
+  // 'bet_tier1' | 'bet_tier2' | 'bet_tier3' | 'deposit'
+  type String @default("bet_tier1") @db.VarChar(20)
+
+  // Exactly one of these is set, matching `type` — nullable because a
+  // deposit-commission row has no GameTransaction and vice versa.
+  sourceGameTransactionId BigInt? @map("source_game_transaction_id")
+  sourceCashTransactionId BigInt? @map("source_cash_transaction_id")
+  // The bet amount (bet_tier*) or deposit amount (deposit) commission was
+  // calculated from — kept as `betAmount` rather than renamed, to avoid
+  // touching every existing read site for what's still the same number.
   betAmount               Decimal @map("bet_amount") @db.Decimal(14, 2)
   commissionRate          Decimal @map("commission_rate") @db.Decimal(6, 4)
   commissionAmount        Decimal @map("commission_amount") @db.Decimal(14, 2)
@@ -596,6 +652,15 @@ model ReferralCommission {
   referral Referral @relation(fields: [referralId], references: [id])
 
   @@index([referrerId, createdAt])
+  // DB-enforced double-payment guards, not just an app-level check — a
+  // retried/concurrent recordBetCommission or recordDepositCommission call
+  // for the same source event hits a unique-constraint error instead of
+  // creating a second row. NULLs don't collide in Postgres, so each
+  // constraint only ever applies to the row type that actually sets it
+  // (bet_tier* rows always have sourceCashTransactionId = null and vice
+  // versa) — a bet's 3 tiers still get 3 separate rows, one per `type`.
+  @@unique([sourceGameTransactionId, type])
+  @@unique([sourceCashTransactionId, type])
   @@map("referral_commissions")
 }
 
