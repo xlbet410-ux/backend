@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { GamesService } from '../games/games.service';
 
 type UserWithDetails = {
   id: bigint;
@@ -21,7 +22,10 @@ type UserWithDetails = {
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly gamesService: GamesService,
+  ) {}
 
   private toDetail(u: UserWithDetails) {
     let totalCashIn = 0;
@@ -107,23 +111,25 @@ export class UsersService {
       throw new NotFoundException('User not found.');
     }
 
-    const [transactions, bonusWallets, gameTransactions] = await Promise.all([
-      this.prisma.cashTransaction.findMany({
-        where: { userId },
-        orderBy: { createdAt: 'desc' },
-        take: 100,
-      }),
-      this.prisma.bonusWallet.findMany({
-        where: { userId },
-        orderBy: { claimedAt: 'desc' },
-        take: 100,
-      }),
-      this.prisma.gameTransaction.findMany({
-        where: { userId },
-        orderBy: { createdAt: 'desc' },
-        take: 100,
-      }),
-    ]);
+    const [transactions, bonusWallets, gameTransactions, nameByUid] =
+      await Promise.all([
+        this.prisma.cashTransaction.findMany({
+          where: { userId },
+          orderBy: { createdAt: 'desc' },
+          take: 100,
+        }),
+        this.prisma.bonusWallet.findMany({
+          where: { userId },
+          orderBy: { claimedAt: 'desc' },
+          take: 100,
+        }),
+        this.prisma.gameTransaction.findMany({
+          where: { userId },
+          orderBy: { createdAt: 'desc' },
+          take: 100,
+        }),
+        this.gamesService.getGameNameMap(),
+      ]);
 
     return {
       transactions: transactions.map((t) => ({
@@ -148,6 +154,7 @@ export class UsersService {
       gameTransactions: gameTransactions.map((g) => ({
         id: g.id.toString(),
         gameUid: g.gameUid,
+        gameName: nameByUid.get(g.gameUid) ?? g.gameUid,
         betAmount: g.betAmount.toString(),
         winAmount: g.winAmount.toString(),
         net: g.winAmount.sub(g.betAmount).toString(),

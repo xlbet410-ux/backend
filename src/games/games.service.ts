@@ -289,6 +289,16 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * gameUid -> display name, resolved from the catalog cache. Public so
+   * other modules (e.g. UsersService's CRM player-360 history view) can
+   * label raw GameTransaction rows without reaching into catalog internals.
+   */
+  async getGameNameMap(): Promise<Map<string, string>> {
+    const catalog = await this.ensureCatalog();
+    return new Map(catalog.map((g) => [g.gameUid, g.name]));
+  }
+
+  /**
    * Real, recent net wins (payout > stake) for the homepage's "Live Wins"
    * ticker — first name only (privacy) and the friendly game name resolved
    * from the catalog cache. Empty until real play produces one; the

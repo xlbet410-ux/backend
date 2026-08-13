@@ -9,5 +9,6 @@ import { ReferralModule } from '../referral/referral.module';
   imports: [BonusModule, VipModule, ReferralModule],
   controllers: [GamesController],
   providers: [GamesService],
+  exports: [GamesService],
 })
 export class GamesModule {}
