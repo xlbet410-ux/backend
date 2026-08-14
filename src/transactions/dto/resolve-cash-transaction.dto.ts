@@ -2,6 +2,7 @@ import {
   IsNumberString,
   IsOptional,
   IsString,
+  MaxLength,
   MinLength,
 } from 'class-validator';
 
@@ -12,6 +13,7 @@ export class ResolveCashTransactionDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
+  @MaxLength(50)
   reviewerUsername?: string;
 
   @IsOptional()

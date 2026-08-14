@@ -3,6 +3,7 @@ import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
 export class RejectKycDto {
   @IsString()
   @IsNotEmpty()
+  @MaxLength(50)
   reviewerUsername: string;
 
   @IsString()

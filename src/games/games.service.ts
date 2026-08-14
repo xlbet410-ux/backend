@@ -736,6 +736,14 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
         'member_account and serial_number are required.',
       );
     }
+    // Defense-in-depth sanity bounds — this endpoint has no caller
+    // authentication yet (see GamesController.callback), so these are the
+    // only guard against a malformed/malicious payload until real signature
+    // verification is added. Negative amounts and a resulting negative
+    // balance are never legitimate.
+    if ((bet_amount ?? 0) < 0 || (win_amount ?? 0) < 0) {
+      throw new BadRequestException('bet_amount and win_amount must not be negative.');
+    }
 
     // Idempotency: a retried callback with the same serial_number must not be applied twice.
     const existing = await this.prisma.gameTransaction.findUnique({
@@ -760,6 +768,11 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
           Number(user.balance) -
           Number(bet_amount || 0) +
           Number(win_amount || 0);
+        if (newBalance < 0) {
+          throw new BadRequestException(
+            `Callback would drive balance negative for ${member_account}.`,
+          );
+        }
         await tx.user.update({
           where: { id: user.id },
           data: { balance: newBalance },

@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
-type OtpEntry = { code: string; expiresAt: number };
+type OtpEntry = { code: string; expiresAt: number; attempts: number };
 type VerifiedEntry = { expiresAt: number };
 
 // Time to enter the 6-digit code after it's texted.
@@ -16,6 +16,11 @@ const OTP_TTL_MS = 5 * 60 * 1000;
 // KycService.submit, which checks wasRecentlyVerified at the final step.
 const VERIFIED_TTL_MS = 30 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 60 * 1000;
+// Caps brute-forcing a single sent code — the route-level @Throttle on
+// /otp/verify limits request rate, but a code is only ~4-8 digits, so a
+// per-code attempt cap matters too: past this many wrong guesses the
+// pending code is invalidated outright, forcing a fresh /otp/send.
+const MAX_VERIFY_ATTEMPTS = 5;
 
 const OSMS_BASE_URL_DEFAULT = 'https://api.o-sms.com/api/service';
 
@@ -90,6 +95,7 @@ export class OtpService {
     this.pending.set(userId, {
       code: data.otp as string,
       expiresAt: Date.now() + OTP_TTL_MS,
+      attempts: 0,
     });
     this.lastSentAt.set(userId, Date.now());
   }
@@ -97,7 +103,12 @@ export class OtpService {
   verifyOtp(userId: string, code: string): boolean {
     const entry = this.pending.get(userId);
     if (!entry || entry.expiresAt < Date.now()) return false;
-    if (entry.code !== code.trim()) return false;
+
+    if (entry.code !== code.trim()) {
+      entry.attempts += 1;
+      if (entry.attempts >= MAX_VERIFY_ATTEMPTS) this.pending.delete(userId);
+      return false;
+    }
 
     this.pending.delete(userId);
     this.verified.set(userId, { expiresAt: Date.now() + VERIFIED_TTL_MS });

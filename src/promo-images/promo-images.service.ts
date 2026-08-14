@@ -2,7 +2,8 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { imageSize } from 'image-size';
 import { randomUUID } from 'crypto';
 import { mkdir, unlink, writeFile } from 'fs/promises';
-import { extname, join } from 'path';
+import { join } from 'path';
+import sharp from 'sharp';
 import { PrismaService } from '../prisma/prisma.service';
 
 const UPLOAD_DIR = join(process.cwd(), 'uploads', 'promo');
@@ -57,9 +58,21 @@ export class PromoImagesService {
       throw new BadRequestException("Couldn't read this image file. It may be corrupted.");
     }
 
+    // Always re-encoded through sharp and always written as .webp — never
+    // the client-supplied filename/extension. See SliderImagesService.upload
+    // for why: otherwise a crafted file with valid-enough image header bytes
+    // but a spoofed .html/.svg extension could be saved and served back with
+    // an attacker-chosen Content-Type (stored XSS on this origin).
+    let optimized: Buffer;
+    try {
+      optimized = await sharp(file.buffer).rotate().webp({ quality: 90 }).toBuffer();
+    } catch {
+      throw new BadRequestException("Couldn't read this image file. It may be corrupted.");
+    }
+
     await mkdir(UPLOAD_DIR, { recursive: true });
-    const filename = `${randomUUID()}${extname(file.originalname).toLowerCase()}`;
-    await writeFile(join(UPLOAD_DIR, filename), file.buffer);
+    const filename = `${randomUUID()}.webp`;
+    await writeFile(join(UPLOAD_DIR, filename), optimized);
 
     const maxSort = await this.prisma.promoImage.aggregate({ _max: { sortOrder: true } });
     const nextSort = (maxSort._max.sortOrder ?? 0) + 1;

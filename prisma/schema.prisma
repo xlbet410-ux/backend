@@ -165,6 +165,7 @@ model Message {
   conversation  Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   senderAccount Account?     @relation(fields: [senderAccountId], references: [id])
 
+  @@index([conversationId, createdAt])
   @@map("messages")
 }
 
@@ -226,6 +227,13 @@ model CashTransaction {
   approvingAgent Agent?          @relation(fields: [approvedByAgentId], references: [id], onDelete: SetNull)
   offer          Offer?          @relation(fields: [offerId], references: [id], onDelete: SetNull)
 
+  // findMine (player transaction history: userId + createdAt sort).
+  @@index([userId, createdAt])
+  // findCashIn/findCashOut (admin approval queues: type + createdAt sort).
+  @@index([type, createdAt])
+  // fireDepositTriggers / getApplicableDepositOffers nth_deposit check
+  // (exact userId+type+status match, no sort needed).
+  @@index([userId, type, status])
   @@map("cash_transactions")
 }
 
@@ -309,7 +317,8 @@ model GameTransaction {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
+  // getMyGameHistory: userId filter + createdAt sort, paginated.
+  @@index([userId, createdAt])
   @@map("game_transactions")
 }
 

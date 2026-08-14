@@ -1,4 +1,4 @@
-import { IsString, Matches } from 'class-validator';
+import { IsString, MaxLength, Matches } from 'class-validator';
 
 export class LoginDto {
   @Matches(/^\+?\d{7,20}$/, {
@@ -7,5 +7,6 @@ export class LoginDto {
   phoneNumber: string;
 
   @IsString()
+  @MaxLength(128)
   password: string;
 }

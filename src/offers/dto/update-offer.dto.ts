@@ -11,6 +11,7 @@ import {
   IsString,
   Matches,
   Max,
+  MaxLength,
   Min,
   MinLength,
 } from 'class-validator';
@@ -26,6 +27,7 @@ export class UpdateOfferDto {
   @IsOptional()
   @IsString()
   @MinLength(3)
+  @MaxLength(100)
   @Matches(/^[a-z0-9_-]+$/, {
     message: 'slug may only contain lowercase letters, numbers, - and _',
   })
@@ -34,18 +36,22 @@ export class UpdateOfferDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
+  @MaxLength(200)
   titleBn?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   titleEn?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   descriptionBn?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   descriptionEn?: string;
 
   // Relative /uploads/... path from the offer image upload endpoint (same
@@ -53,18 +59,22 @@ export class UpdateOfferDto {
   // reject it.
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   imageUrl?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   bannerUrl?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   termsBn?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   termsEn?: string;
 
   @IsOptional()
@@ -73,6 +83,7 @@ export class UpdateOfferDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   groupKey?: string;
 
   @IsOptional()

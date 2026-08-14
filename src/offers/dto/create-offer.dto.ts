@@ -11,6 +11,7 @@ import {
   IsString,
   Matches,
   Max,
+  MaxLength,
   Min,
   MinLength,
 } from 'class-validator';
@@ -52,6 +53,7 @@ export const OFFER_CLAIM_WINDOWS = ['lifetime', 'daily'] as const;
 export class CreateOfferDto {
   @IsString()
   @MinLength(3)
+  @MaxLength(100)
   @Matches(/^[a-z0-9_-]+$/, {
     message: 'slug may only contain lowercase letters, numbers, - and _',
   })
@@ -59,18 +61,22 @@ export class CreateOfferDto {
 
   @IsString()
   @MinLength(1)
+  @MaxLength(200)
   titleBn: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   titleEn?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   descriptionBn?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   descriptionEn?: string;
 
   // Relative /uploads/... path from the offer image upload endpoint (same
@@ -78,18 +84,22 @@ export class CreateOfferDto {
   // reject it.
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   imageUrl?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   bannerUrl?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   termsBn?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   termsEn?: string;
 
   @IsOptional()
@@ -98,6 +108,7 @@ export class CreateOfferDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   groupKey?: string;
 
   @IsIn(OFFER_CATEGORIES)

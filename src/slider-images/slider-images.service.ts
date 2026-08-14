@@ -2,7 +2,8 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { imageSize } from 'image-size';
 import { randomUUID } from 'crypto';
 import { mkdir, unlink, writeFile } from 'fs/promises';
-import { extname, join } from 'path';
+import { join } from 'path';
+import sharp from 'sharp';
 import { PrismaService } from '../prisma/prisma.service';
 
 const UPLOAD_DIR = join(process.cwd(), 'uploads', 'slider');
@@ -74,9 +75,23 @@ export class SliderImagesService {
       );
     }
 
+    // Always re-encoded through sharp and always written as .webp — never
+    // the client-supplied filename/extension. That's what actually makes
+    // this safe to serve statically: a crafted file with valid-enough image
+    // header bytes but a spoofed .html/.svg extension could otherwise be
+    // saved and served back with an attacker-chosen Content-Type (stored
+    // XSS on this origin). Re-encoding also strips any non-pixel payload
+    // trailing the real image data. Mirrors OffersService.uploadImage.
+    let optimized: Buffer;
+    try {
+      optimized = await sharp(file.buffer).rotate().webp({ quality: 90 }).toBuffer();
+    } catch {
+      throw new BadRequestException("Couldn't read this image file. It may be corrupted.");
+    }
+
     await mkdir(UPLOAD_DIR, { recursive: true });
-    const filename = `${randomUUID()}${extname(file.originalname).toLowerCase()}`;
-    await writeFile(join(UPLOAD_DIR, filename), file.buffer);
+    const filename = `${randomUUID()}.webp`;
+    await writeFile(join(UPLOAD_DIR, filename), optimized);
 
     const maxSort = await this.prisma.sliderImage.aggregate({ _max: { sortOrder: true } });
     const nextSort = (maxSort._max.sortOrder ?? 0) + 1;

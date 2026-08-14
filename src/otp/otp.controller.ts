@@ -28,6 +28,8 @@ export class OtpController {
     return { success: true };
   }
 
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('verify')
   verify(
     @Req() req: { user: { userId: string } },

@@ -543,15 +543,42 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
         })
       : null;
 
+    // Batched claim counts instead of one query per offer: split by
+    // claimWindow (the WHERE shape differs — 'daily' adds a claimedAt
+    // filter) and groupBy offerId within each, so this is 0-2 queries total
+    // for the whole list instead of one per offer.
+    const claimCountByOfferId = new Map<string, number>();
+    if (userId) {
+      const dailyIds: bigint[] = [];
+      const lifetimeIds: bigint[] = [];
+      for (const offer of offers) {
+        (offer.claimWindow === 'daily' ? dailyIds : lifetimeIds).push(offer.id);
+      }
+      const [dailyCounts, lifetimeCounts] = await Promise.all([
+        dailyIds.length
+          ? this.prisma.offerClaim.groupBy({
+              by: ['offerId'],
+              where: { userId, offerId: { in: dailyIds }, claimedAt: { gte: this.startOfToday() } },
+              _count: { _all: true },
+            })
+          : Promise.resolve([]),
+        lifetimeIds.length
+          ? this.prisma.offerClaim.groupBy({
+              by: ['offerId'],
+              where: { userId, offerId: { in: lifetimeIds } },
+              _count: { _all: true },
+            })
+          : Promise.resolve([]),
+      ]);
+      for (const row of [...dailyCounts, ...lifetimeCounts]) {
+        claimCountByOfferId.set(row.offerId.toString(), row._count._all);
+      }
+    }
+
     const result: Array<Record<string, unknown>> = [];
     for (const offer of offers) {
-      let alreadyClaimed = false;
-      if (userId) {
-        const claims = await this.prisma.offerClaim.count({
-          where: this.claimCountWhere(offer.id, userId, offer.claimWindow),
-        });
-        alreadyClaimed = claims >= offer.maxClaimsPerUser;
-      }
+      const claims = claimCountByOfferId.get(offer.id.toString()) ?? 0;
+      const alreadyClaimed = claims >= offer.maxClaimsPerUser;
 
       const eligible = user
         ? (!offer.requiresKyc || user.kycVerification?.status === 'verified') &&
@@ -646,6 +673,36 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
       orderBy: { priority: 'desc' },
     });
 
+    // Batched instead of one offerClaim query per offer — same approach as
+    // listForUser (split by claimWindow, groupBy offerId).
+    const claimCountByOfferId = new Map<string, number>();
+    if (offers.length) {
+      const dailyIds = offers.filter((o) => o.claimWindow === 'daily').map((o) => o.id);
+      const lifetimeIds = offers.filter((o) => o.claimWindow !== 'daily').map((o) => o.id);
+      const [dailyCounts, lifetimeCounts] = await Promise.all([
+        dailyIds.length
+          ? this.prisma.offerClaim.groupBy({
+              by: ['offerId'],
+              where: { userId, offerId: { in: dailyIds }, claimedAt: { gte: this.startOfToday() } },
+              _count: { _all: true },
+            })
+          : Promise.resolve([]),
+        lifetimeIds.length
+          ? this.prisma.offerClaim.groupBy({
+              by: ['offerId'],
+              where: { userId, offerId: { in: lifetimeIds } },
+              _count: { _all: true },
+            })
+          : Promise.resolve([]),
+      ]);
+      for (const row of [...dailyCounts, ...lifetimeCounts]) {
+        claimCountByOfferId.set(row.offerId.toString(), row._count._all);
+      }
+    }
+    // Same value regardless of which offer is being checked — computed once
+    // instead of re-querying inside the loop for every nth_deposit offer.
+    let depositCount: number | null = null;
+
     const applicable: Array<Record<string, unknown>> = [];
     for (const offer of offers) {
       if (offer.minDeposit && amount.lessThan(offer.minDeposit)) continue;
@@ -655,9 +712,7 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
       if (offer.requiresKyc && user.kycVerification?.status !== 'verified')
         continue;
 
-      const claims = await this.prisma.offerClaim.count({
-        where: this.claimCountWhere(offer.id, userId, offer.claimWindow),
-      });
+      const claims = claimCountByOfferId.get(offer.id.toString()) ?? 0;
       if (claims >= offer.maxClaimsPerUser) continue;
 
       if (
@@ -669,9 +724,11 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
 
       if (offer.triggerType === 'nth_deposit') {
         const nth = (offer.triggerConfig as { nth?: number } | null)?.nth;
-        const depositCount = await this.prisma.cashTransaction.count({
-          where: { userId, type: 'cash_in', status: 'completed' },
-        });
+        if (depositCount === null) {
+          depositCount = await this.prisma.cashTransaction.count({
+            where: { userId, type: 'cash_in', status: 'completed' },
+          });
+        }
         if (nth && depositCount + 1 !== nth) continue;
       }
 

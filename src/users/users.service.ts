@@ -27,12 +27,17 @@ export class UsersService {
     private readonly gamesService: GamesService,
   ) {}
 
-  private toDetail(u: UserWithDetails) {
-    let totalCashIn = 0;
-    let totalCashOut = 0;
-    for (const tx of u.cashTransactions) {
-      if (tx.type === 'cash_in') totalCashIn += Number(tx.amount);
-      else totalCashOut += Number(tx.amount);
+  private toDetail(
+    u: UserWithDetails,
+    precomputedTotals?: { cashIn: number; cashOut: number },
+  ) {
+    let totalCashIn = precomputedTotals?.cashIn ?? 0;
+    let totalCashOut = precomputedTotals?.cashOut ?? 0;
+    if (!precomputedTotals) {
+      for (const tx of u.cashTransactions) {
+        if (tx.type === 'cash_in') totalCashIn += Number(tx.amount);
+        else totalCashOut += Number(tx.amount);
+      }
     }
     return {
       id: u.id.toString(),
@@ -57,15 +62,34 @@ export class UsersService {
   async findAll() {
     const users = await this.prisma.user.findMany({
       orderBy: { id: 'desc' },
-      include: {
-        kycVerification: true,
-        cashTransactions: {
-          where: { status: 'completed' },
-          select: { type: true, amount: true },
-        },
-      },
+      include: { kycVerification: true },
     });
-    return users.map((u) => this.toDetail(u));
+
+    // A single aggregate over every completed transaction, grouped by
+    // (userId, type) — instead of the old approach, which nested every
+    // user's full completed-transaction history into the query and summed
+    // it in JS per user. That transferred and held an unbounded array per
+    // user just to compute two totals; this computes the totals in the DB
+    // and merges them in O(1) per user.
+    const totals = await this.prisma.cashTransaction.groupBy({
+      by: ['userId', 'type'],
+      where: { status: 'completed' },
+      _sum: { amount: true },
+    });
+    const totalsByUser = new Map<string, { cashIn: number; cashOut: number }>();
+    for (const row of totals) {
+      const key = row.userId.toString();
+      const entry = totalsByUser.get(key) ?? { cashIn: 0, cashOut: 0 };
+      const sum = Number(row._sum.amount ?? 0);
+      if (row.type === 'cash_in') entry.cashIn += sum;
+      else entry.cashOut += sum;
+      totalsByUser.set(key, entry);
+    }
+
+    return users.map((u) => {
+      const t = totalsByUser.get(u.id.toString());
+      return this.toDetail({ ...u, cashTransactions: [] }, t);
+    });
   }
 
   async findOne(id: string) {
