@@ -300,37 +300,6 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     return new Map(catalog.map((g) => [g.gameUid, g.name]));
   }
 
-  /**
-   * Real, recent net wins (payout > stake) for the homepage's "Live Wins"
-   * ticker — first name only (privacy) and the friendly game name resolved
-   * from the catalog cache. Empty until real play produces one; the
-   * frontend falls back to its own placeholder rows when this is empty.
-   */
-  async getLiveWins(): Promise<
-    { name: string; game: string; amount: string; value: number }[]
-  > {
-    const rows = await this.prisma.gameTransaction.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 100,
-      include: { user: { select: { fullName: true } } },
-    });
-    const wins = rows.filter((r) => Number(r.winAmount) > Number(r.betAmount));
-    if (wins.length === 0) return [];
-
-    const catalog = await this.ensureCatalog();
-    const nameByUid = new Map(catalog.map((g) => [g.gameUid, g.name]));
-
-    return wins.slice(0, 12).map((r) => {
-      const value = Math.round(Number(r.winAmount));
-      return {
-        name: r.user.fullName.split(' ')[0] || r.user.fullName,
-        game: nameByUid.get(r.gameUid) ?? 'Casino Game',
-        amount: `৳${value.toLocaleString()}`,
-        value,
-      };
-    });
-  }
-
   /** Player's own bet-by-bet history — profile page "Game History" tab. */
   async getMyGameHistory(userId: bigint, page = 1, pageSize = 30) {
     const size = Math.min(pageSize, 100);
