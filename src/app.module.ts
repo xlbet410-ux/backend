@@ -24,6 +24,7 @@ import { NotificationModule } from './notification/notification.module';
 import { BalanceModule } from './balance/balance.module';
 import { OtpModule } from './otp/otp.module';
 import { MessagingModule } from './messaging/messaging.module';
+import { AdminModule } from './admin/admin.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { MessagingModule } from './messaging/messaging.module';
     BalanceModule,
     OtpModule,
     MessagingModule,
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
