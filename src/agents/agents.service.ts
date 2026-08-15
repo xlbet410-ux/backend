@@ -334,63 +334,124 @@ export class AgentsService {
     }
   }
 
+  // Turns a period selector into a concrete [from, to) range, computed
+  // against Bangladesh Standard Time (UTC+6, no DST — this platform's only
+  // timezone) rather than UTC or the server's own local time. Using raw UTC
+  // here would make "today" flip over 6 hours early for a Dhaka-based staff
+  // member (e.g. still showing yesterday's empty totals at 2am local time).
+  // 'day' defaults to today but accepts an explicit YYYY-MM-DD (interpreted
+  // as a Dhaka calendar date); 'week' is Monday-through-now of the current
+  // week; 'month' is the 1st-through-now of the current month, all in
+  // Dhaka time. No period at all means all-time (undefined).
+  private resolvePeriodRange(
+    period?: 'day' | 'week' | 'month',
+    date?: string,
+  ): { from: Date; to: Date } | undefined {
+    if (!period) return undefined;
+
+    const DHAKA_OFFSET_MS = 6 * 60 * 60 * 1000;
+    const now = new Date();
+    // Shifting by the offset then reading UTC Y/M/D off the shifted instant
+    // yields the Dhaka calendar date — then shifting back gives the real
+    // UTC instant for Dhaka midnight on that date.
+    const dhakaDateStr = (instant: Date) =>
+      new Date(instant.getTime() + DHAKA_OFFSET_MS).toISOString().slice(0, 10);
+    const dhakaMidnightUtc = (dateStr: string) =>
+      new Date(new Date(`${dateStr}T00:00:00.000Z`).getTime() - DHAKA_OFFSET_MS);
+
+    if (period === 'day') {
+      const from = dhakaMidnightUtc(date ?? dhakaDateStr(now));
+      const to = new Date(from);
+      to.setUTCDate(to.getUTCDate() + 1);
+      return { from, to };
+    }
+
+    if (period === 'week') {
+      const todayStr = dhakaDateStr(now);
+      const todayUtcMidnight = new Date(`${todayStr}T00:00:00.000Z`);
+      // getUTCDay(): 0=Sun..6=Sat — roll back to the most recent Monday.
+      const day = todayUtcMidnight.getUTCDay();
+      todayUtcMidnight.setUTCDate(todayUtcMidnight.getUTCDate() - (day === 0 ? 6 : day - 1));
+      const from = dhakaMidnightUtc(todayUtcMidnight.toISOString().slice(0, 10));
+      return { from, to: now };
+    }
+
+    // month
+    const [y, m] = dhakaDateStr(now).split('-');
+    const from = dhakaMidnightUtc(`${y}-${m}-01`);
+    return { from, to: now };
+  }
+
   /**
    * Referred-player breakdown for an agent's own dashboard (and the CRM's
-   * agent-detail view): per player, their deposit/withdraw/wagered/loss
+   * agent-detail view): per player, their deposit/withdraw/wagered/won/loss
    * totals, plus the agent's total commission earned from them. Batched
    * aggregates (one groupBy per metric) instead of one query per player.
+   *
+   * `range`, when given, restricts every figure (deposits, withdrawals,
+   * bets, commission) to transactions created within [from, to) — the
+   * player list itself (who this agent has referred, ever) is not
+   * filtered, so a player with no activity in the period just shows zeros
+   * rather than disappearing.
    */
-  async getReferredPlayerStats(agentId: string) {
+  async getReferredPlayerStats(
+    agentId: string,
+    period?: 'day' | 'week' | 'month',
+    date?: string,
+  ) {
     const id = BigInt(agentId);
+    const range = this.resolvePeriodRange(period, date);
     const players = await this.prisma.user.findMany({
       where: { referredByAgentId: id },
       select: { id: true, fullName: true, memberId: true, createdAt: true },
       orderBy: { createdAt: 'desc' },
     });
     if (players.length === 0) {
-      return { players: [], totals: { deposit: 0, withdraw: 0, wagered: 0, loss: 0, commission: 0 } };
+      return {
+        players: [],
+        totals: { deposit: 0, withdraw: 0, wagered: 0, won: 0, loss: 0, commission: 0 },
+      };
     }
     const playerIds = players.map((p) => p.id);
+    const dateFilter = range
+      ? { createdAt: { gte: range.from, lt: range.to } }
+      : {};
 
     const [deposits, withdrawals, bets, commissions] = await Promise.all([
       this.prisma.cashTransaction.groupBy({
         by: ['userId'],
-        where: { userId: { in: playerIds }, type: 'cash_in', status: 'completed' },
+        where: { userId: { in: playerIds }, type: 'cash_in', status: 'completed', ...dateFilter },
         _sum: { amount: true },
       }),
       this.prisma.cashTransaction.groupBy({
         by: ['userId'],
-        where: { userId: { in: playerIds }, type: 'cash_out', status: 'completed' },
+        where: { userId: { in: playerIds }, type: 'cash_out', status: 'completed', ...dateFilter },
         _sum: { amount: true },
       }),
       this.prisma.gameTransaction.groupBy({
         by: ['userId'],
-        where: { userId: { in: playerIds } },
-        _sum: { betAmount: true },
+        where: { userId: { in: playerIds }, ...dateFilter },
+        _sum: { betAmount: true, winAmount: true },
       }),
-      // Same source table recordLossCommission writes to — loss and
-      // commission are reported from the exact figures commission was
-      // actually computed and paid on, so the two numbers always agree
-      // (a naive wagered-minus-won net across all bets would drift from
-      // the per-bet-loss basis commission is paid on whenever a player has
-      // both winning and losing bets in the period).
       this.prisma.agentCommission.groupBy({
         by: ['playerId'],
-        where: { agentId: id },
-        _sum: { lossAmount: true, commissionAmount: true },
+        where: { agentId: id, ...dateFilter },
+        _sum: { commissionAmount: true },
       }),
     ]);
 
     const depositByUser = new Map(deposits.map((d) => [d.userId.toString(), Number(d._sum.amount ?? 0)]));
     const withdrawByUser = new Map(withdrawals.map((w) => [w.userId.toString(), Number(w._sum.amount ?? 0)]));
     const wageredByUser = new Map(bets.map((b) => [b.userId.toString(), Number(b._sum.betAmount ?? 0)]));
-    const lossByUser = new Map(commissions.map((c) => [c.playerId.toString(), Number(c._sum.lossAmount ?? 0)]));
+    const wonByUser = new Map(bets.map((b) => [b.userId.toString(), Number(b._sum.winAmount ?? 0)]));
     const commissionByUser = new Map(
       commissions.map((c) => [c.playerId.toString(), Number(c._sum.commissionAmount ?? 0)]),
     );
 
     const rows = players.map((p) => {
       const key = p.id.toString();
+      const wagered = wageredByUser.get(key) ?? 0;
+      const won = wonByUser.get(key) ?? 0;
       return {
         id: key,
         fullName: p.fullName,
@@ -398,8 +459,9 @@ export class AgentsService {
         joinedAt: p.createdAt.toISOString(),
         deposit: depositByUser.get(key) ?? 0,
         withdraw: withdrawByUser.get(key) ?? 0,
-        wagered: wageredByUser.get(key) ?? 0,
-        loss: lossByUser.get(key) ?? 0,
+        wagered,
+        won,
+        loss: Math.max(0, wagered - won),
         commission: commissionByUser.get(key) ?? 0,
       };
     });
@@ -409,10 +471,11 @@ export class AgentsService {
         deposit: acc.deposit + r.deposit,
         withdraw: acc.withdraw + r.withdraw,
         wagered: acc.wagered + r.wagered,
+        won: acc.won + r.won,
         loss: acc.loss + r.loss,
         commission: acc.commission + r.commission,
       }),
-      { deposit: 0, withdraw: 0, wagered: 0, loss: 0, commission: 0 },
+      { deposit: 0, withdraw: 0, wagered: 0, won: 0, loss: 0, commission: 0 },
     );
 
     return { players: rows, totals };

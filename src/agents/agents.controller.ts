@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { AgentsService } from './agents.service';
@@ -13,6 +14,7 @@ import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
 import { AgentLoginDto } from './dto/agent-login.dto';
 import { AgentChangePasswordDto } from './dto/agent-change-password.dto';
+import { GetReferralsQueryDto } from './dto/get-referrals-query.dto';
 import { ApiKeyGuard } from '../common/guards/api-key.guard';
 
 // Every route here is API-key gated, called server-side by the CRM only —
@@ -58,10 +60,12 @@ export class AgentsController {
     return this.agentsService.changePassword(id, dto);
   }
 
-  // Per-referred-player deposit/withdraw/wagered/loss/commission breakdown
-  // for this agent's own dashboard, and the CRM's admin agent-detail view.
+  // Per-referred-player deposit/withdraw/wagered/won/loss/commission
+  // breakdown for this agent's own dashboard, and the CRM's admin
+  // agent-detail view. ?period=day|week|month (optionally &date=YYYY-MM-DD
+  // for day) restricts every figure to that window; omitted = all-time.
   @Get(':id/referrals')
-  getReferrals(@Param('id') id: string) {
-    return this.agentsService.getReferredPlayerStats(id);
+  getReferrals(@Param('id') id: string, @Query() query: GetReferralsQueryDto) {
+    return this.agentsService.getReferredPlayerStats(id, query.period, query.date);
   }
 }

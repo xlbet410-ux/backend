@@ -5,6 +5,7 @@ import { UpdatePaymentAccountDto } from './dto/update-payment-account.dto';
 
 type PaymentAccountRow = {
   id: bigint;
+  agentId: bigint;
   method: string;
   label: string;
   accountNumber: string;
@@ -43,8 +44,10 @@ export class PaymentAccountsService {
 
   // Public view — what the bet site's Deposit/Withdraw page reads with no
   // auth, so it's deliberately stripped down to just what a depositing
-  // player needs to see.
-  private toPublicActive(account: PaymentAccountRow) {
+  // player needs to see. isMyAgent tells the frontend to always show this
+  // one for a referred player instead of shuffling it in with the shared
+  // pool — see findAllActiveForUser.
+  private toPublicActive(account: PaymentAccountRow, isMyAgent = false) {
     return {
       id: account.id.toString(),
       method: account.method,
@@ -54,6 +57,7 @@ export class PaymentAccountsService {
       details: account.details,
       isActive: account.isActive,
       createdAt: account.createdAt.toISOString(),
+      isMyAgent,
     };
   }
 
@@ -78,10 +82,13 @@ export class PaymentAccountsService {
   }
 
   // Authenticated view for a logged-in player: the shared 'personal' pool,
-  // plus — only if this player was referred by a 'commission'-type agent —
-  // that one agent's own numbers. A commission agent's numbers never show
-  // to anyone else, matching the "agent number for only their referred
-  // player" requirement.
+  // plus — if this player was referred by any agent — that one agent's own
+  // numbers, flagged isMyAgent so the frontend always shows that specific
+  // account instead of shuffling it in with the shared pool (a
+  // 'commission'-type agent's numbers are otherwise hidden from everyone
+  // else; a 'personal' agent's numbers were already in the shared pool, but
+  // still get flagged so their own referred player sees them consistently
+  // rather than at random).
   async findAllActiveForUser(userId: bigint) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -100,7 +107,12 @@ export class PaymentAccountsService {
       },
       orderBy: [{ method: 'asc' }, { createdAt: 'asc' }],
     });
-    return accounts.map((a) => this.toPublicActive(a));
+    return accounts.map((a) =>
+      this.toPublicActive(
+        a,
+        user?.referredByAgentId != null && a.agentId === user.referredByAgentId,
+      ),
+    );
   }
 
   async create(dto: CreatePaymentAccountDto) {
