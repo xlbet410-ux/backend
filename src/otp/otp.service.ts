@@ -24,6 +24,19 @@ const MAX_VERIFY_ATTEMPTS = 5;
 
 const OSMS_BASE_URL_DEFAULT = 'https://api.o-sms.com/api/service';
 
+// O-SMS expects the Bangladesh country code with no leading '+', e.g.
+// "8801712345678" (see their docs: "88017XXXXXXXX") — not the local
+// "01712345678" a player would actually type, and not a "+880..." either.
+// Normalizes whatever digits the caller sent (local, already-prefixed, or
+// with a '+') to that one format so a plain local number never gets
+// rejected as an invalid phone number.
+function normalizeBangladeshiPhone(phoneNumber: string): string {
+  const digits = phoneNumber.replace(/\D/g, '');
+  if (digits.startsWith('880')) return digits;
+  if (digits.startsWith('0')) return `880${digits.slice(1)}`;
+  return `880${digits}`;
+}
+
 /**
  * Wraps the O-SMS "Generate & Send OTP" endpoint. That endpoint has no
  * server-side verification of its own — it hands back the code it just
@@ -58,6 +71,11 @@ export class OtpService {
         'Please wait a moment before requesting another code.',
       );
     }
+    // Armed for every attempt, not just a successful one — otherwise a
+    // user mashing the button while sends keep failing (or a client bug
+    // retrying in a loop) can hammer O-SMS with no cooldown at all, which
+    // is exactly how this app first hit O-SMS's own 429 rate limit.
+    this.lastSentAt.set(userId, Date.now());
 
     const baseUrl =
       this.config.get<string>('OSMS_BASE_URL') ?? OSMS_BASE_URL_DEFAULT;
@@ -68,6 +86,8 @@ export class OtpService {
       );
     }
 
+    const normalizedPhone = normalizeBangladeshiPhone(phoneNumber);
+
     let data: { success?: boolean; otp?: string; message?: string } | null =
       null;
     try {
@@ -77,7 +97,7 @@ export class OtpService {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ phoneNumber }),
+        body: JSON.stringify({ phoneNumber: normalizedPhone }),
       });
       data = await res.json().catch(() => null);
       if (!res.ok || !data?.success || typeof data.otp !== 'string') {
@@ -85,7 +105,7 @@ export class OtpService {
       }
     } catch (err) {
       this.logger.error(
-        `OTP send failed for ${phoneNumber}: ${(err as Error).message}`,
+        `OTP send failed for ${normalizedPhone}: ${(err as Error).message}`,
       );
       throw new BadRequestException(
         "Couldn't send the verification code. Please check the number and try again.",
@@ -97,7 +117,6 @@ export class OtpService {
       expiresAt: Date.now() + OTP_TTL_MS,
       attempts: 0,
     });
-    this.lastSentAt.set(userId, Date.now());
   }
 
   verifyOtp(userId: string, code: string): boolean {
