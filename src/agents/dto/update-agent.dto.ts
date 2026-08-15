@@ -1,5 +1,6 @@
 import {
   IsBoolean,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -8,6 +9,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { AGENT_TYPES } from './create-agent.dto';
 
 export class UpdateAgentDto {
   @IsOptional()
@@ -41,4 +43,8 @@ export class UpdateAgentDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsIn(AGENT_TYPES)
+  type?: string;
 }

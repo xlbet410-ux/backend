@@ -57,4 +57,11 @@ export class AgentsController {
   changePassword(@Param('id') id: string, @Body() dto: AgentChangePasswordDto) {
     return this.agentsService.changePassword(id, dto);
   }
+
+  // Per-referred-player deposit/withdraw/wagered/loss/commission breakdown
+  // for this agent's own dashboard, and the CRM's admin agent-detail view.
+  @Get(':id/referrals')
+  getReferrals(@Param('id') id: string) {
+    return this.agentsService.getReferredPlayerStats(id);
+  }
 }

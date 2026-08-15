@@ -103,9 +103,13 @@ export class TransactionsService {
   // Resolves which agent payment account a request is tied to. A cash-in
   // passes the exact account it showed the player (requestedId) so the
   // record matches what they actually saw; a cash-out never has one to
-  // pass (the player picks no account when withdrawing) and always falls
-  // back to the first active account for the method.
+  // pass (the player picks no account when withdrawing). Either way, if
+  // this player was referred by an agent, that agent's own active account
+  // for the method is preferred over the general pool — this is what
+  // routes a referred player's withdrawal request to their agent's panel,
+  // and (for cash-in with no requestedId) shows their agent's number.
   private async resolvePaymentAccountId(
+    userId: bigint,
     method: string,
     requestedId?: string,
   ): Promise<bigint | null> {
@@ -115,6 +119,23 @@ export class TransactionsService {
       });
       if (account && account.method === method) return account.id;
     }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { referredByAgentId: true },
+    });
+    if (user?.referredByAgentId) {
+      const agentAccount = await this.prisma.paymentAccount.findFirst({
+        where: {
+          method,
+          isActive: true,
+          agentId: user.referredByAgentId,
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (agentAccount) return agentAccount.id;
+    }
+
     const fallback = await this.prisma.paymentAccount.findFirst({
       where: { method, isActive: true },
       orderBy: { createdAt: 'asc' },
@@ -168,6 +189,7 @@ export class TransactionsService {
   // still deposit; it's only withdrawals that require verification.
   async createCashIn(userId: string, dto: CreateCashTransactionDto) {
     const paymentAccountId = await this.resolvePaymentAccountId(
+      BigInt(userId),
       dto.method,
       dto.paymentAccountId,
     );
@@ -212,7 +234,10 @@ export class TransactionsService {
       throw new ForbiddenException(canWithdraw.reason);
     }
 
-    const paymentAccountId = await this.resolvePaymentAccountId(dto.method);
+    const paymentAccountId = await this.resolvePaymentAccountId(
+      user.id,
+      dto.method,
+    );
     const tx = await this.prisma.cashTransaction.create({
       data: {
         userId: user.id,

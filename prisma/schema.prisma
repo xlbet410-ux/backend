@@ -55,6 +55,13 @@ model User {
   referralEnabled Boolean @default(true) @map("referral_enabled")
   lifetimeCommissionEarned Decimal @default(0) @map("lifetime_commission_earned") @db.Decimal(14, 2)
 
+  // Set once at registration if the player signed up via an agent's own
+  // referral link (?agent=CODE), independent of the player-to-player
+  // Referral system above. Drives deposit/withdraw payment-account routing
+  // and, for type='commission' agents, automatic loss-based commission —
+  // see PaymentAccountsService and AgentsService.recordLossCommission.
+  referredByAgentId BigInt? @map("referred_by_agent_id")
+
   // Daily-login streak — plain counters, no separate "streak" table needed
   // for the live value; LoginStreakLog below is history/audit only.
   loginStreak        Int       @default(0) @map("login_streak")
@@ -76,7 +83,10 @@ model User {
   cashbackGrants       CashbackGrant[]
   loginStreakLogs      LoginStreakLog[]
   notifications        Notification[]
+  referredByAgent      Agent?               @relation("AgentReferrals", fields: [referredByAgentId], references: [id], onDelete: SetNull)
+  agentCommissions     AgentCommission[]
 
+  @@index([referredByAgentId])
   @@map("users")
 }
 
@@ -291,16 +301,61 @@ model Agent {
   fullName     String   @map("full_name") @db.VarChar(100)
   phoneNumber  String   @unique @map("phone_number") @db.VarChar(20)
   passwordHash String?  @map("password_hash") @db.VarChar(255)
+  // Rate applied by AgentsService.recordLossCommission — but only for
+  // type='commission' agents; 'personal' agents keep this field around
+  // (harmless if set) but it's never actually paid out for them.
   commission   Decimal  @default(0) @db.Decimal(5, 2)
   accountLimit Decimal  @default(0) @map("account_limit") @db.Decimal(14, 2)
   isActive     Boolean  @default(true) @map("is_active")
+
+  // 'personal' (default) — this agent's payment accounts behave exactly as
+  // before: part of the shared pool any player can see/be routed to, no
+  // automatic commission payout, even though a referred player is still
+  // preferentially routed to them.
+  // 'commission' — this agent's payment accounts are hidden from every
+  // player EXCEPT the ones they referred (see PaymentAccountsService), and
+  // they automatically earn `commission`% of every referred player's net
+  // bet loss (see AgentsService.recordLossCommission) — not on deposit
+  // volume, not on the player's wins.
+  type String @default("personal") @db.VarChar(20)
+
+  // Shareable code for this agent's own referral link (e.g. ?agent=CODE at
+  // signup) — every agent gets one regardless of type, since a 'personal'
+  // agent still benefits from the preferential deposit/withdraw routing.
+  referralCode String? @unique @map("referral_code") @db.VarChar(20)
+
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz
 
   paymentAccounts  PaymentAccount[]
   approvedRequests CashTransaction[]
+  referredPlayers  User[]            @relation("AgentReferrals")
+  commissions      AgentCommission[]
 
   @@map("agents")
+}
+
+// Real-money commission an agent earns on their referred players' net bet
+// losses — see AgentsService.recordLossCommission, hooked into the same
+// game-callback path as ReferralCommission. Dedup'd via the unique
+// constraint on sourceGameTransactionId (one commission row per bet, at
+// most), same pattern as ReferralCommission's source-transaction uniques.
+model AgentCommission {
+  id                      BigInt   @id @default(autoincrement())
+  agentId                 BigInt   @map("agent_id")
+  playerId                BigInt   @map("player_id")
+  sourceGameTransactionId BigInt   @unique @map("source_game_transaction_id")
+  lossAmount              Decimal  @map("loss_amount") @db.Decimal(14, 2)
+  commissionRate          Decimal  @map("commission_rate") @db.Decimal(5, 2)
+  commissionAmount        Decimal  @map("commission_amount") @db.Decimal(14, 2)
+  createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  agent  Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  player User  @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+  @@index([playerId])
+  @@map("agent_commissions")
 }
 
 model GameTransaction {

@@ -65,9 +65,39 @@ export class PaymentAccountsService {
     return accounts.map((a) => this.toAdmin(a));
   }
 
+  // Public, unauthenticated view — no player identity to check against, so
+  // 'commission'-type agents' numbers (which are exclusive to their own
+  // referred players) are always excluded here. See findAllActiveForUser
+  // for the authenticated equivalent used by logged-in players.
   async findAllActive() {
     const accounts = await this.prisma.paymentAccount.findMany({
-      where: { isActive: true },
+      where: { isActive: true, agent: { type: { not: 'commission' } } },
+      orderBy: [{ method: 'asc' }, { createdAt: 'asc' }],
+    });
+    return accounts.map((a) => this.toPublicActive(a));
+  }
+
+  // Authenticated view for a logged-in player: the shared 'personal' pool,
+  // plus — only if this player was referred by a 'commission'-type agent —
+  // that one agent's own numbers. A commission agent's numbers never show
+  // to anyone else, matching the "agent number for only their referred
+  // player" requirement.
+  async findAllActiveForUser(userId: bigint) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { referredByAgentId: true },
+    });
+
+    const accounts = await this.prisma.paymentAccount.findMany({
+      where: {
+        isActive: true,
+        OR: [
+          { agent: { type: { not: 'commission' } } },
+          ...(user?.referredByAgentId
+            ? [{ agentId: user.referredByAgentId }]
+            : []),
+        ],
+      },
       orderBy: [{ method: 'asc' }, { createdAt: 'asc' }],
     });
     return accounts.map((a) => this.toPublicActive(a));

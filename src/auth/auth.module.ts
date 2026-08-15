@@ -7,12 +7,14 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { OffersModule } from '../offers/offers.module';
 import { ReferralModule } from '../referral/referral.module';
 import { LoginStreakModule } from '../login-streak/login-streak.module';
+import { AgentsModule } from '../agents/agents.module';
 
 @Module({
   imports: [
     OffersModule,
     ReferralModule,
     LoginStreakModule,
+    AgentsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

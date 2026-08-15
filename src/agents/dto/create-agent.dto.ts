@@ -13,6 +13,12 @@ import {
 import { Type } from 'class-transformer';
 import { PAYMENT_METHODS } from '../../payment-accounts/dto/create-payment-account.dto';
 
+// 'personal' (default) — shared payment-account pool, no automatic
+// commission. 'commission' — accounts hidden from everyone except this
+// agent's own referred players, who also earn the agent a real cut of
+// their net bet losses. See schema.prisma's Agent.type comment.
+export const AGENT_TYPES = ['personal', 'commission'] as const;
+
 class InitialPaymentAccountDto {
   @IsIn(PAYMENT_METHODS)
   method: string;
@@ -61,6 +67,10 @@ export class CreateAgentDto {
   @IsNumber()
   @Min(0)
   accountLimit?: number;
+
+  @IsOptional()
+  @IsIn(AGENT_TYPES)
+  type?: string;
 
   // Lets the admin add the agent's first number(s) — same method or mixed
   // — in the same request that creates the profile.

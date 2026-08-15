@@ -28,6 +28,14 @@ export class RegisterDto {
   @MaxLength(20)
   referralCode?: string;
 
+  // Captured silently from a ?agent=CODE signup link — see
+  // AgentsService.linkAgentReferral. Not a player-facing field, no visible
+  // input for it in the UI.
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  agentCode?: string;
+
   @IsOptional()
   @IsBoolean()
   isAdult?: boolean;

@@ -15,6 +15,7 @@ import { BonusService } from '../bonus/bonus.service';
 import { VipService } from '../vip/vip.service';
 import { ReferralService } from '../referral/referral.service';
 import { BalanceService } from '../balance/balance.service';
+import { AgentsService } from '../agents/agents.service';
 import {
   CatalogGame,
   GAME_CATEGORIES,
@@ -75,6 +76,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     private readonly vipService: VipService,
     private readonly referralService: ReferralService,
     private readonly balanceService: BalanceService,
+    private readonly agentsService: AgentsService,
   ) {}
 
   onModuleInit(): void {
@@ -819,6 +821,19 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
         } catch (err) {
           this.logger.error(
             `Referral commission failed for user ${result.userId}: ${(err as Error).message}`,
+          );
+        }
+
+        try {
+          await this.agentsService.recordLossCommission(
+            result.userId,
+            new Prisma.Decimal(bet_amount),
+            new Prisma.Decimal(win_amount || 0),
+            result.gameTransactionId,
+          );
+        } catch (err) {
+          this.logger.error(
+            `Agent commission failed for user ${result.userId}: ${(err as Error).message}`,
           );
         }
       }

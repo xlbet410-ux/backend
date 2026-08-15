@@ -14,6 +14,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { OffersService } from '../offers/offers.service';
 import { ReferralService } from '../referral/referral.service';
 import { LoginStreakService } from '../login-streak/login-streak.service';
+import { AgentsService } from '../agents/agents.service';
 
 const SALT_ROUNDS = 10;
 
@@ -27,6 +28,7 @@ export class AuthService {
     private readonly offersService: OffersService,
     private readonly referralService: ReferralService,
     private readonly loginStreakService: LoginStreakService,
+    private readonly agentsService: AgentsService,
   ) {}
 
   private async generateOwnReferralCode(): Promise<string> {
@@ -96,6 +98,10 @@ export class AuthService {
     // Resolves dto.referralCode against a real referrer and creates the
     // tracking row — never blocks registration on failure.
     await this.referralService.linkReferral(user.id, dto.referralCode, signupIp);
+
+    // Silent agent-affiliate link (?agent=CODE) — separate mechanism from
+    // the player referral above, never blocks registration on failure.
+    await this.agentsService.linkAgentReferral(user.id, dto.agentCode);
 
     // Never let a broken offer definition block registration.
     try {
