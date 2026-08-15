@@ -219,6 +219,7 @@ export class TransactionsService {
         reference: dto.reference.trim(),
         paymentAccountId,
         offerId: dto.offerId ? BigInt(dto.offerId) : null,
+        noOffer: dto.noOffer ?? false,
       },
       include: ADMIN_INCLUDE,
     });
@@ -372,7 +373,7 @@ export class TransactionsService {
     // undo it — a bug in bonus-awarding must never block or roll back an
     // otherwise-valid deposit/withdrawal approval.
     if (tx.type === 'cash_in') {
-      await this.fireDepositTriggers(tx.userId, tx.amount, tx.offerId);
+      await this.fireDepositTriggers(tx.userId, tx.amount, tx.offerId, tx.noOffer);
 
       try {
         await this.vipService.recordDeposit(tx.userId, tx.amount);
@@ -418,7 +419,15 @@ export class TransactionsService {
     userId: bigint,
     amount: Prisma.Decimal,
     offerId: bigint | null,
+    noOffer: boolean,
   ) {
+    // The player explicitly declined every promotion on this deposit —
+    // processTrigger would otherwise auto-match some OTHER eligible offer
+    // when offerId is empty (that fallback exists for deposits made with
+    // no explicit choice at all, e.g. no offers were ever shown), which
+    // silently grants a bonus the player just said they didn't want.
+    if (noOffer) return;
+
     try {
       const depositCount = await this.prisma.cashTransaction.count({
         where: { userId, type: 'cash_in', status: 'completed' },

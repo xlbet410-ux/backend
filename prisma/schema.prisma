@@ -230,6 +230,12 @@ model CashTransaction {
   // TransactionsService.approve), and only if the player still qualifies
   // at that point (budget/KYC/limits are re-checked, not trusted from here).
   offerId BigInt? @map("offer_id")
+  // True only when the player explicitly picked "do not participate in
+  // any promotions" on the deposit step — distinct from offerId simply
+  // being unset (e.g. no offers were ever shown to choose from). Gates
+  // fireDepositTriggers from auto-matching this deposit to some other
+  // eligible offer behind the player's back.
+  noOffer Boolean @default(false) @map("no_offer")
 
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   reviewer       Account?        @relation(fields: [reviewedBy], references: [id], onDelete: SetNull)

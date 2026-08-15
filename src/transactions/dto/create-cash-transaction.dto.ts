@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsIn,
   IsNumber,
   IsNumberString,
@@ -43,4 +44,11 @@ export class CreateCashTransactionDto {
   @IsOptional()
   @IsNumberString()
   offerId?: string;
+
+  // True only when the player explicitly picked "do not participate in
+  // any promotions" (cash-in only) — distinct from simply omitting
+  // offerId, which could just as easily mean no offers were ever shown.
+  @IsOptional()
+  @IsBoolean()
+  noOffer?: boolean;
 }
