@@ -81,38 +81,31 @@ export class PaymentAccountsService {
     return accounts.map((a) => this.toPublicActive(a));
   }
 
-  // Authenticated view for a logged-in player: the shared 'personal' pool,
-  // plus — if this player was referred by any agent — that one agent's own
-  // numbers, flagged isMyAgent so the frontend always shows that specific
-  // account instead of shuffling it in with the shared pool (a
-  // 'commission'-type agent's numbers are otherwise hidden from everyone
-  // else; a 'personal' agent's numbers were already in the shared pool, but
-  // still get flagged so their own referred player sees them consistently
-  // rather than at random).
+  // Authenticated view for a logged-in player. A player referred by an
+  // agent (personal or commission type — either way) sees ONLY that
+  // agent's own numbers, never the shared pool and never another agent's —
+  // exclusive to their agent for every payment method that agent has, full
+  // stop. A player with no referring agent sees the shared 'personal' pool
+  // as before ('commission'-type agents' numbers stay hidden from them).
   async findAllActiveForUser(userId: bigint) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { referredByAgentId: true },
     });
 
+    if (user?.referredByAgentId) {
+      const accounts = await this.prisma.paymentAccount.findMany({
+        where: { isActive: true, agentId: user.referredByAgentId },
+        orderBy: [{ method: 'asc' }, { createdAt: 'asc' }],
+      });
+      return accounts.map((a) => this.toPublicActive(a, true));
+    }
+
     const accounts = await this.prisma.paymentAccount.findMany({
-      where: {
-        isActive: true,
-        OR: [
-          { agent: { type: { not: 'commission' } } },
-          ...(user?.referredByAgentId
-            ? [{ agentId: user.referredByAgentId }]
-            : []),
-        ],
-      },
+      where: { isActive: true, agent: { type: { not: 'commission' } } },
       orderBy: [{ method: 'asc' }, { createdAt: 'asc' }],
     });
-    return accounts.map((a) =>
-      this.toPublicActive(
-        a,
-        user?.referredByAgentId != null && a.agentId === user.referredByAgentId,
-      ),
-    );
+    return accounts.map((a) => this.toPublicActive(a));
   }
 
   async create(dto: CreatePaymentAccountDto) {

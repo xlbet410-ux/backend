@@ -103,28 +103,38 @@ export class TransactionsService {
   // Resolves which agent payment account a request is tied to. A cash-in
   // passes the exact account it showed the player (requestedId) so the
   // record matches what they actually saw; a cash-out never has one to
-  // pass (the player picks no account when withdrawing). Either way, if
-  // this player was referred by an agent, that agent's own active account
-  // for the method is preferred over the general pool — this is what
-  // routes a referred player's withdrawal request to their agent's panel,
-  // and (for cash-in with no requestedId) shows their agent's number.
+  // pass (the player picks no account when withdrawing). A player referred
+  // by an agent is exclusive to that agent — their request always routes
+  // there, and NEVER falls back to the general pool or another agent, even
+  // if that agent has no active account for the method (this deliberately
+  // can leave paymentAccountId null) or if requestedId names some other
+  // account (ignored rather than trusted — the frontend only ever shows a
+  // referred player their own agent's numbers, so a mismatched requestedId
+  // can only mean a stale/crafted request). Only a player with no
+  // referring agent uses the general pool, requestedId included.
   private async resolvePaymentAccountId(
     userId: bigint,
     method: string,
     requestedId?: string,
   ): Promise<bigint | null> {
-    if (requestedId) {
-      const account = await this.prisma.paymentAccount.findUnique({
-        where: { id: BigInt(requestedId) },
-      });
-      if (account && account.method === method) return account.id;
-    }
-
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { referredByAgentId: true },
     });
+
     if (user?.referredByAgentId) {
+      if (requestedId) {
+        const account = await this.prisma.paymentAccount.findUnique({
+          where: { id: BigInt(requestedId) },
+        });
+        if (
+          account &&
+          account.method === method &&
+          account.agentId === user.referredByAgentId
+        ) {
+          return account.id;
+        }
+      }
       const agentAccount = await this.prisma.paymentAccount.findFirst({
         where: {
           method,
@@ -133,7 +143,14 @@ export class TransactionsService {
         },
         orderBy: { createdAt: 'asc' },
       });
-      if (agentAccount) return agentAccount.id;
+      return agentAccount?.id ?? null;
+    }
+
+    if (requestedId) {
+      const account = await this.prisma.paymentAccount.findUnique({
+        where: { id: BigInt(requestedId) },
+      });
+      if (account && account.method === method) return account.id;
     }
 
     const fallback = await this.prisma.paymentAccount.findFirst({
