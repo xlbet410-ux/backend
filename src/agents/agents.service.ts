@@ -417,7 +417,7 @@ export class AgentsService {
       ? { createdAt: { gte: range.from, lt: range.to } }
       : {};
 
-    const [deposits, withdrawals, bets, commissions, grossLosses] = await Promise.all([
+    const [deposits, withdrawals, bets, commissions] = await Promise.all([
       this.prisma.cashTransaction.groupBy({
         by: ['userId'],
         where: { userId: { in: playerIds }, type: 'cash_in', status: 'completed', ...dateFilter },
@@ -438,25 +438,6 @@ export class AgentsService {
         where: { agentId: id, ...dateFilter },
         _sum: { commissionAmount: true },
       }),
-      // "Loss" must match what commission is actually paid on: the sum of
-      // each individual losing bet (bet - win, only when positive), not
-      // wagered-minus-won netted across the whole period. Netting lets a
-      // big win on one bet visually cancel out a real loss on another,
-      // which made this column disagree with the commission figure right
-      // next to it whenever a player had a mix of wins and losses.
-      range
-        ? this.prisma.$queryRaw<{ user_id: string; gross_loss: unknown }[]>`
-            SELECT user_id::text AS user_id, COALESCE(SUM(GREATEST(bet_amount - win_amount, 0)), 0) AS gross_loss
-            FROM game_transactions
-            WHERE user_id = ANY(${playerIds}::bigint[]) AND created_at >= ${range.from} AND created_at < ${range.to}
-            GROUP BY user_id
-          `
-        : this.prisma.$queryRaw<{ user_id: string; gross_loss: unknown }[]>`
-            SELECT user_id::text AS user_id, COALESCE(SUM(GREATEST(bet_amount - win_amount, 0)), 0) AS gross_loss
-            FROM game_transactions
-            WHERE user_id = ANY(${playerIds}::bigint[])
-            GROUP BY user_id
-          `,
     ]);
 
     const depositByUser = new Map(deposits.map((d) => [d.userId.toString(), Number(d._sum.amount ?? 0)]));
@@ -466,10 +447,11 @@ export class AgentsService {
     const commissionByUser = new Map(
       commissions.map((c) => [c.playerId.toString(), Number(c._sum.commissionAmount ?? 0)]),
     );
-    const lossByUser = new Map(grossLosses.map((g) => [g.user_id, Number(g.gross_loss ?? 0)]));
 
     const rows = players.map((p) => {
       const key = p.id.toString();
+      const wagered = wageredByUser.get(key) ?? 0;
+      const won = wonByUser.get(key) ?? 0;
       return {
         id: key,
         fullName: p.fullName,
@@ -477,9 +459,9 @@ export class AgentsService {
         joinedAt: p.createdAt.toISOString(),
         deposit: depositByUser.get(key) ?? 0,
         withdraw: withdrawByUser.get(key) ?? 0,
-        wagered: wageredByUser.get(key) ?? 0,
-        won: wonByUser.get(key) ?? 0,
-        loss: lossByUser.get(key) ?? 0,
+        wagered,
+        won,
+        loss: Math.max(0, wagered - won),
         commission: commissionByUser.get(key) ?? 0,
       };
     });
