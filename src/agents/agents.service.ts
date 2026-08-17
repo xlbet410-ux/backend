@@ -449,20 +449,23 @@ export class AgentsService {
       const wagered = wageredByUser.get(key) ?? 0;
       const won = wonByUser.get(key) ?? 0;
       const loss = Math.max(0, wagered - won);
+      const deposit = depositByUser.get(key) ?? 0;
+      // Commission is capped at what the player has actually deposited —
+      // Total Loss can run past that (e.g. wagering wins back into more
+      // bets), but the agent's cut never exceeds deposit * rate. Total Loss
+      // itself is shown uncapped, unchanged, for transparency.
+      const commissionBasis = Math.min(loss, deposit);
       return {
         id: key,
         fullName: p.fullName,
         memberId: p.memberId,
         joinedAt: p.createdAt.toISOString(),
-        deposit: depositByUser.get(key) ?? 0,
+        deposit,
         withdraw: withdrawByUser.get(key) ?? 0,
         wagered,
         won,
         loss,
-        // Commission always tracks this same Loss figure at the agent's
-        // current rate — computed here rather than summed from the
-        // AgentCommission ledger, so the two numbers can never disagree.
-        commission: (loss * commissionRate) / 100,
+        commission: (commissionBasis * commissionRate) / 100,
       };
     });
 
