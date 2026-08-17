@@ -754,6 +754,7 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
         turnoverBase: offer.turnoverBase,
         bonusValidityDays: offer.bonusValidityDays,
         termsBn: offer.termsBn,
+        termsEn: offer.termsEn,
       });
     }
 
