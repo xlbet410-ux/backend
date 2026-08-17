@@ -7,7 +7,6 @@ import {
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
-import { DEPOSIT_TURNOVER_TYPE } from '../bonus/bonus.service';
 import { Prisma } from '../../generated/prisma/client';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
@@ -294,23 +293,6 @@ export class AgentsService {
       });
       if (!player?.referredByAgentId) return;
 
-      // Commission is calculated ONLY on principal (main wallet) loss.
-      // deposit_turnover isn't "an offer" — it's still the player's own
-      // deposit, just not fully wagered once yet — so it doesn't disqualify
-      // a bet. Any OTHER active BonusWallet means this bet is staked with
-      // offer/bonus balance, which must be excluded from commission
-      // entirely (Total Loss in the CRM table is unaffected by this check —
-      // see getReferredPlayerStats, which still shows combined loss).
-      const activeBonus = await this.prisma.bonusWallet.findFirst({
-        where: {
-          userId: playerUserId,
-          status: 'active',
-          type: { not: DEPOSIT_TURNOVER_TYPE },
-          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-        },
-      });
-      if (activeBonus) return;
-
       const agent = await this.prisma.agent.findUnique({
         where: { id: player.referredByAgentId },
       });
@@ -419,23 +401,27 @@ export class AgentsService {
   ) {
     const id = BigInt(agentId);
     const range = this.resolvePeriodRange(period, date);
-    const players = await this.prisma.user.findMany({
-      where: { referredByAgentId: id },
-      select: { id: true, fullName: true, memberId: true, createdAt: true },
-      orderBy: { createdAt: 'desc' },
-    });
+    const [agent, players] = await Promise.all([
+      this.prisma.agent.findUnique({ where: { id }, select: { commission: true } }),
+      this.prisma.user.findMany({
+        where: { referredByAgentId: id },
+        select: { id: true, fullName: true, memberId: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
     if (players.length === 0) {
       return {
         players: [],
         totals: { deposit: 0, withdraw: 0, wagered: 0, won: 0, loss: 0, commission: 0 },
       };
     }
+    const commissionRate = Number(agent?.commission ?? 0);
     const playerIds = players.map((p) => p.id);
     const dateFilter = range
       ? { createdAt: { gte: range.from, lt: range.to } }
       : {};
 
-    const [deposits, withdrawals, bets, commissions] = await Promise.all([
+    const [deposits, withdrawals, bets] = await Promise.all([
       this.prisma.cashTransaction.groupBy({
         by: ['userId'],
         where: { userId: { in: playerIds }, type: 'cash_in', status: 'completed', ...dateFilter },
@@ -451,31 +437,18 @@ export class AgentsService {
         where: { userId: { in: playerIds }, ...dateFilter },
         _sum: { betAmount: true, winAmount: true },
       }),
-      // Commission is summed from this ledger, NOT derived from Total Loss
-      // below — recordLossCommission only ever writes a row here for a
-      // losing bet staked with the player's own principal (it skips bets
-      // made while a real offer/bonus wallet is active), so this sum is
-      // exactly principal-only commission, decoupled from the combined
-      // Total Loss figure shown in the table.
-      this.prisma.agentCommission.groupBy({
-        by: ['playerId'],
-        where: { agentId: id, ...dateFilter },
-        _sum: { commissionAmount: true },
-      }),
     ]);
 
     const depositByUser = new Map(deposits.map((d) => [d.userId.toString(), Number(d._sum.amount ?? 0)]));
     const withdrawByUser = new Map(withdrawals.map((w) => [w.userId.toString(), Number(w._sum.amount ?? 0)]));
     const wageredByUser = new Map(bets.map((b) => [b.userId.toString(), Number(b._sum.betAmount ?? 0)]));
     const wonByUser = new Map(bets.map((b) => [b.userId.toString(), Number(b._sum.winAmount ?? 0)]));
-    const commissionByUser = new Map(
-      commissions.map((c) => [c.playerId.toString(), Number(c._sum.commissionAmount ?? 0)]),
-    );
 
     const rows = players.map((p) => {
       const key = p.id.toString();
       const wagered = wageredByUser.get(key) ?? 0;
       const won = wonByUser.get(key) ?? 0;
+      const loss = Math.max(0, wagered - won);
       return {
         id: key,
         fullName: p.fullName,
@@ -485,11 +458,11 @@ export class AgentsService {
         withdraw: withdrawByUser.get(key) ?? 0,
         wagered,
         won,
-        // Combined loss (principal + bonus wagering) — unchanged, shown for
-        // transparency. Commission below is deliberately NOT derived from
-        // this figure.
-        loss: Math.max(0, wagered - won),
-        commission: commissionByUser.get(key) ?? 0,
+        loss,
+        // Commission always tracks this same Loss figure at the agent's
+        // current rate — computed here rather than summed from the
+        // AgentCommission ledger, so the two numbers can never disagree.
+        commission: (loss * commissionRate) / 100,
       };
     });
 
