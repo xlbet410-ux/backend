@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import { DEPOSIT_TURNOVER_TYPE } from '../bonus/bonus.service';
 import { Prisma } from '../../generated/prisma/client';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
@@ -293,6 +294,21 @@ export class AgentsService {
       });
       if (!player?.referredByAgentId) return;
 
+      // Commission is calculated ONLY on principal (main wallet) loss.
+      // deposit_turnover isn't "an offer" — it's still the player's own
+      // deposit, just not fully wagered once yet — so it doesn't disqualify
+      // a bet. Any OTHER active BonusWallet means this bet is staked with
+      // offer/bonus balance, which must be excluded entirely.
+      const activeBonus = await this.prisma.bonusWallet.findFirst({
+        where: {
+          userId: playerUserId,
+          status: 'active',
+          type: { not: DEPOSIT_TURNOVER_TYPE },
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+        },
+      });
+      if (activeBonus) return;
+
       const agent = await this.prisma.agent.findUnique({
         where: { id: player.referredByAgentId },
       });
@@ -384,9 +400,10 @@ export class AgentsService {
 
   /**
    * Referred-player breakdown for an agent's own dashboard (and the CRM's
-   * agent-detail view): per player, their deposit/withdraw/wagered/won/loss
-   * totals, plus the agent's total commission earned from them. Batched
-   * aggregates (one groupBy per metric) instead of one query per player.
+   * agent-detail view): per player, their deposit/withdraw/wagered/won
+   * totals (all of their play, informational), plus loss and commission
+   * (principal wallet only — see recordLossCommission). Batched aggregates
+   * (one groupBy per metric) instead of one query per player.
    *
    * `range`, when given, restricts every figure (deposits, withdrawals,
    * bets, commission) to transactions created within [from, to) — the
@@ -401,27 +418,23 @@ export class AgentsService {
   ) {
     const id = BigInt(agentId);
     const range = this.resolvePeriodRange(period, date);
-    const [agent, players] = await Promise.all([
-      this.prisma.agent.findUnique({ where: { id }, select: { commission: true } }),
-      this.prisma.user.findMany({
-        where: { referredByAgentId: id },
-        select: { id: true, fullName: true, memberId: true, createdAt: true },
-        orderBy: { createdAt: 'desc' },
-      }),
-    ]);
+    const players = await this.prisma.user.findMany({
+      where: { referredByAgentId: id },
+      select: { id: true, fullName: true, memberId: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
     if (players.length === 0) {
       return {
         players: [],
         totals: { deposit: 0, withdraw: 0, wagered: 0, won: 0, loss: 0, commission: 0 },
       };
     }
-    const commissionRate = Number(agent?.commission ?? 0);
     const playerIds = players.map((p) => p.id);
     const dateFilter = range
       ? { createdAt: { gte: range.from, lt: range.to } }
       : {};
 
-    const [deposits, withdrawals, bets] = await Promise.all([
+    const [deposits, withdrawals, bets, commissions] = await Promise.all([
       this.prisma.cashTransaction.groupBy({
         by: ['userId'],
         where: { userId: { in: playerIds }, type: 'cash_in', status: 'completed', ...dateFilter },
@@ -437,18 +450,30 @@ export class AgentsService {
         where: { userId: { in: playerIds }, ...dateFilter },
         _sum: { betAmount: true, winAmount: true },
       }),
+      // Loss and commission both come from this ledger, not from raw
+      // GameTransaction bet/win totals — recordLossCommission only ever
+      // writes a row here for a losing bet staked with the player's own
+      // principal (it skips bets made while a real offer/bonus wallet is
+      // active), so this sum is exactly PRINCIPAL loss, never inflated by
+      // offer/bonus wagering. See recordLossCommission for that split.
+      this.prisma.agentCommission.groupBy({
+        by: ['playerId'],
+        where: { agentId: id, ...dateFilter },
+        _sum: { commissionAmount: true, lossAmount: true },
+      }),
     ]);
 
     const depositByUser = new Map(deposits.map((d) => [d.userId.toString(), Number(d._sum.amount ?? 0)]));
     const withdrawByUser = new Map(withdrawals.map((w) => [w.userId.toString(), Number(w._sum.amount ?? 0)]));
     const wageredByUser = new Map(bets.map((b) => [b.userId.toString(), Number(b._sum.betAmount ?? 0)]));
     const wonByUser = new Map(bets.map((b) => [b.userId.toString(), Number(b._sum.winAmount ?? 0)]));
+    const lossByUser = new Map(commissions.map((c) => [c.playerId.toString(), Number(c._sum.lossAmount ?? 0)]));
+    const commissionByUser = new Map(
+      commissions.map((c) => [c.playerId.toString(), Number(c._sum.commissionAmount ?? 0)]),
+    );
 
     const rows = players.map((p) => {
       const key = p.id.toString();
-      const wagered = wageredByUser.get(key) ?? 0;
-      const won = wonByUser.get(key) ?? 0;
-      const loss = Math.max(0, wagered - won);
       return {
         id: key,
         fullName: p.fullName,
@@ -456,13 +481,10 @@ export class AgentsService {
         joinedAt: p.createdAt.toISOString(),
         deposit: depositByUser.get(key) ?? 0,
         withdraw: withdrawByUser.get(key) ?? 0,
-        wagered,
-        won,
-        loss,
-        // Commission always tracks this same Loss figure at the agent's
-        // current rate — computed here rather than summed from the
-        // AgentCommission ledger, so the two numbers can never disagree.
-        commission: (loss * commissionRate) / 100,
+        wagered: wageredByUser.get(key) ?? 0,
+        won: wonByUser.get(key) ?? 0,
+        loss: lossByUser.get(key) ?? 0,
+        commission: commissionByUser.get(key) ?? 0,
       };
     });
 
