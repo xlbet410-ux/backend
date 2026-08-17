@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -482,5 +483,115 @@ export class AgentsService {
     );
 
     return { players: rows, totals };
+  }
+
+  /**
+   * Commission wallet summary. Deliberately reuses getReferredPlayerStats
+   * (all-time, no period) for the earned total rather than summing
+   * AgentCommission directly — that method's commission figure is
+   * deposit-capped (min(loss, deposit) * rate), and the wallet must track
+   * the exact same number shown everywhere else, not a second, disagreeing
+   * one. Settlements never touch real money (agents are paid outside the
+   * app) — they just record what's already been paid out, so it stops
+   * counting as owed.
+   */
+  async getWalletSummary(agentId: string) {
+    const id = BigInt(agentId);
+    const [stats, settlements] = await Promise.all([
+      this.getReferredPlayerStats(agentId),
+      this.prisma.agentSettlement.groupBy({
+        by: ['status'],
+        where: { agentId: id, status: { in: ['completed', 'pending'] } },
+        _sum: { amount: true },
+      }),
+    ]);
+
+    const totalEarnedCommission = stats.totals.commission;
+    const totalSettled = Number(
+      settlements.find((s) => s.status === 'completed')?._sum.amount ?? 0,
+    );
+    const pendingAmount = Number(
+      settlements.find((s) => s.status === 'pending')?._sum.amount ?? 0,
+    );
+    const walletBalance = Math.max(0, totalEarnedCommission - totalSettled);
+    const requestableBalance = Math.max(0, walletBalance - pendingAmount);
+
+    return { totalEarnedCommission, totalSettled, pendingAmount, walletBalance, requestableBalance };
+  }
+
+  /** Agent-initiated: request payout of some or all of their requestable balance. */
+  async requestSettlement(agentId: string, amount: number, note?: string) {
+    if (amount <= 0) {
+      throw new BadRequestException('Settlement amount must be greater than zero.');
+    }
+    const summary = await this.getWalletSummary(agentId);
+    if (amount > summary.requestableBalance) {
+      throw new BadRequestException(
+        `You can request at most ৳${summary.requestableBalance.toFixed(2)} right now.`,
+      );
+    }
+
+    return this.prisma.agentSettlement.create({
+      data: {
+        agentId: BigInt(agentId),
+        amount: new Prisma.Decimal(amount),
+        note: note?.trim() || null,
+      },
+    });
+  }
+
+  /** Staff-initiated: confirm a pending settlement request as paid. */
+  async confirmSettlement(settlementId: string, confirmedByUsername: string) {
+    return this.resolveSettlement(settlementId, confirmedByUsername, 'completed');
+  }
+
+  /** Staff-initiated: decline a pending settlement request (e.g. a mistake/duplicate). */
+  async rejectSettlement(settlementId: string, confirmedByUsername: string) {
+    return this.resolveSettlement(settlementId, confirmedByUsername, 'rejected');
+  }
+
+  private async resolveSettlement(
+    settlementId: string,
+    confirmedByUsername: string,
+    status: 'completed' | 'rejected',
+  ) {
+    const settlement = await this.prisma.agentSettlement.findUnique({
+      where: { id: BigInt(settlementId) },
+    });
+    if (!settlement) {
+      throw new NotFoundException('Settlement request not found.');
+    }
+    if (settlement.status !== 'pending') {
+      throw new ConflictException('This settlement request has already been resolved.');
+    }
+    const confirmer = await this.prisma.account.findUnique({
+      where: { username: confirmedByUsername },
+    });
+    if (!confirmer) {
+      throw new NotFoundException('Reviewer account not found.');
+    }
+
+    return this.prisma.agentSettlement.update({
+      where: { id: settlement.id },
+      data: { status, confirmedBy: confirmer.id, confirmedAt: new Date() },
+    });
+  }
+
+  async getSettlementHistory(agentId: string) {
+    const settlements = await this.prisma.agentSettlement.findMany({
+      where: { agentId: BigInt(agentId) },
+      include: { confirmer: { select: { username: true } } },
+      orderBy: { requestedAt: 'desc' },
+    });
+
+    return settlements.map((s) => ({
+      id: s.id.toString(),
+      amount: s.amount.toString(),
+      status: s.status,
+      note: s.note,
+      requestedAt: s.requestedAt.toISOString(),
+      confirmedByUsername: s.confirmer?.username ?? null,
+      confirmedAt: s.confirmedAt?.toISOString() ?? null,
+    }));
   }
 }

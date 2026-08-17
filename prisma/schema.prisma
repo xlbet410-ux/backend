@@ -144,6 +144,7 @@ model Account {
   sentMessages             Message[]
   reviewedKyc              KycVerification[]
   reviewedCashTransactions CashTransaction[]
+  confirmedAgentSettlements AgentSettlement[]
 
   @@map("accounts")
 }
@@ -337,6 +338,7 @@ model Agent {
   approvedRequests CashTransaction[]
   referredPlayers  User[]            @relation("AgentReferrals")
   commissions      AgentCommission[]
+  settlements      AgentSettlement[]
 
   @@map("agents")
 }
@@ -362,6 +364,29 @@ model AgentCommission {
   @@index([agentId])
   @@index([playerId])
   @@map("agent_commissions")
+}
+
+// An agent requesting payout of their earned commission, and staff
+// confirming (or rejecting) that request — same request/approve shape as
+// CashTransaction, not a real money movement (agents are paid outside the
+// app either way): confirming just records "staff paid out X on this date,"
+// which AgentsService.getWalletSummary then subtracts from what's still
+// owed. See AgentsService.requestSettlement/confirmSettlement/rejectSettlement.
+model AgentSettlement {
+  id          BigInt    @id @default(autoincrement())
+  agentId     BigInt    @map("agent_id")
+  amount      Decimal   @db.Decimal(14, 2)
+  status      String    @default("pending") @db.VarChar(20) // 'pending' | 'completed' | 'rejected'
+  note        String?   @db.VarChar(500)
+  requestedAt DateTime  @default(now()) @map("requested_at") @db.Timestamptz
+  confirmedBy BigInt?   @map("confirmed_by")
+  confirmedAt DateTime? @map("confirmed_at") @db.Timestamptz
+
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  confirmer Account? @relation(fields: [confirmedBy], references: [id])
+
+  @@index([agentId, status])
+  @@map("agent_settlements")
 }
 
 model GameTransaction {

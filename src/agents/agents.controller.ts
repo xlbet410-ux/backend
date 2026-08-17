@@ -15,6 +15,8 @@ import { UpdateAgentDto } from './dto/update-agent.dto';
 import { AgentLoginDto } from './dto/agent-login.dto';
 import { AgentChangePasswordDto } from './dto/agent-change-password.dto';
 import { GetReferralsQueryDto } from './dto/get-referrals-query.dto';
+import { RequestSettlementDto } from './dto/request-settlement.dto';
+import { ResolveSettlementDto } from './dto/resolve-settlement.dto';
 import { ApiKeyGuard } from '../common/guards/api-key.guard';
 
 // Every route here is API-key gated, called server-side by the CRM only —
@@ -67,5 +69,36 @@ export class AgentsController {
   @Get(':id/referrals')
   getReferrals(@Param('id') id: string, @Query() query: GetReferralsQueryDto) {
     return this.agentsService.getReferredPlayerStats(id, query.period, query.date);
+  }
+
+  // Commission wallet: earned (all-time, deposit-capped — same figure
+  // getReferrals shows) minus settled/pending. See getWalletSummary.
+  @Get(':id/wallet')
+  getWallet(@Param('id') id: string) {
+    return this.agentsService.getWalletSummary(id);
+  }
+
+  @Get(':id/wallet/history')
+  getWalletHistory(@Param('id') id: string) {
+    return this.agentsService.getSettlementHistory(id);
+  }
+
+  // Agent requests payout of their own requestable balance.
+  @Post(':id/wallet/settlements')
+  requestSettlement(@Param('id') id: string, @Body() dto: RequestSettlementDto) {
+    return this.agentsService.requestSettlement(id, dto.amount, dto.note);
+  }
+
+  // Staff confirms/rejects a pending request — looked up by its own id,
+  // not scoped under an agent id (mirrors how CashTransaction resolve
+  // routes work: /transactions/:id/approve, not /agents/:id/transactions/:txId/approve).
+  @Patch('wallet/settlements/:settlementId/confirm')
+  confirmSettlement(@Param('settlementId') settlementId: string, @Body() dto: ResolveSettlementDto) {
+    return this.agentsService.confirmSettlement(settlementId, dto.confirmedByUsername);
+  }
+
+  @Patch('wallet/settlements/:settlementId/reject')
+  rejectSettlement(@Param('settlementId') settlementId: string, @Body() dto: ResolveSettlementDto) {
+    return this.agentsService.rejectSettlement(settlementId, dto.confirmedByUsername);
   }
 }
