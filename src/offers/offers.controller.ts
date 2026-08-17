@@ -67,6 +67,13 @@ export class OffersController {
     return this.bonusService.canWithdraw(BigInt(req.user.userId));
   }
 
+  // Powers the wallet page's Main Wallet / Turnover Wallet split.
+  @UseGuards(JwtAuthGuard)
+  @Get('wallet-summary')
+  walletSummary(@Req() req: { user: { userId: string } }) {
+    return this.bonusService.getWalletSummary(BigInt(req.user.userId));
+  }
+
   @UseGuards(JwtAuthGuard)
   @Post('bonuses/:id/forfeit')
   forfeit(@Param('id') id: string, @Req() req: { user: { userId: string } }) {

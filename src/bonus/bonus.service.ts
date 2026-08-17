@@ -186,6 +186,73 @@ export class BonusService {
     };
   }
 
+  /**
+   * Main Wallet / Turnover Wallet split for the wallet page. Every bonus
+   * type's amount is already in `balance` from the moment it's granted (see
+   * processTurnover's docstring above) — so "Turnover Wallet" isn't a real,
+   * separate pool of money, it's a computed subset of `balance` that's still
+   * behind an active (non-deposit) BonusWallet. Deposit-turnover amounts are
+   * deliberately excluded from that subtraction: the deposit's own 1x
+   * requirement blocks withdrawal (see canWithdraw) but the principal stays
+   * fully visible/usable in Main Wallet the whole time.
+   */
+  async getWalletSummary(userId: bigint) {
+    const [active, user] = await Promise.all([
+      this.prisma.bonusWallet.findMany({
+        where: { userId, status: 'active', ...activeExpiryFilter() },
+        orderBy: { claimedAt: 'asc' },
+      }),
+      this.prisma.user.findUniqueOrThrow({ where: { id: userId } }),
+    ]);
+
+    const depositWallets = active.filter((b) => b.type === DEPOSIT_TURNOVER_TYPE);
+    const bonusWallets = active.filter((b) => b.type !== DEPOSIT_TURNOVER_TYPE);
+
+    const turnoverWallet = bonusWallets.reduce(
+      (sum, b) => sum.add(b.amount),
+      new Prisma.Decimal(0),
+    );
+    const mainWallet = user.balance.sub(turnoverWallet);
+
+    const depositTurnover =
+      depositWallets.length === 0
+        ? null
+        : (() => {
+            const totalPrincipal = depositWallets.reduce((s, b) => s.add(b.amount), new Prisma.Decimal(0));
+            const turnoverRequired = depositWallets.reduce((s, b) => s.add(b.turnoverRequired), new Prisma.Decimal(0));
+            const turnoverDone = depositWallets.reduce((s, b) => s.add(b.turnoverDone), new Prisma.Decimal(0));
+            return {
+              totalPrincipal: totalPrincipal.toString(),
+              turnoverRequired: turnoverRequired.toString(),
+              turnoverDone: turnoverDone.toString(),
+              progressPercent: Number(turnoverDone.div(turnoverRequired).mul(100).toFixed(1)),
+            };
+          })();
+
+    const turnoverBonuses = bonusWallets.map((b) => {
+      const daysLeft = b.expiresAt
+        ? Math.max(0, Math.ceil((b.expiresAt.getTime() - Date.now()) / 86_400_000))
+        : 999;
+      return {
+        id: b.id.toString(),
+        type: b.type,
+        amount: b.amount.toString(),
+        turnoverRequired: b.turnoverRequired.toString(),
+        turnoverDone: b.turnoverDone.toString(),
+        progressPercent: Number(b.turnoverDone.div(b.turnoverRequired).mul(100).toFixed(1)),
+        daysLeft,
+      };
+    });
+
+    return {
+      balance: user.balance.toString(),
+      mainWallet: mainWallet.toString(),
+      turnoverWallet: turnoverWallet.toString(),
+      depositTurnover,
+      turnoverBonuses,
+    };
+  }
+
   /** User voluntarily gives up a bonus (and its remaining turnover) to withdraw sooner. */
   async forfeitBonus(userId: bigint, bonusWalletId: bigint) {
     const bonus = await this.prisma.bonusWallet.findFirst({
