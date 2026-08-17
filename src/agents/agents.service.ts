@@ -486,19 +486,23 @@ export class AgentsService {
   }
 
   /**
-   * Commission wallet summary. Deliberately reuses getReferredPlayerStats
-   * (all-time, no period) for the earned total rather than summing
-   * AgentCommission directly — that method's commission figure is
-   * deposit-capped (min(loss, deposit) * rate), and the wallet must track
-   * the exact same number shown everywhere else, not a second, disagreeing
-   * one. Settlements never touch real money (agents are paid outside the
-   * app) — they just record what's already been paid out, so it stops
-   * counting as owed.
+   * Commission wallet summary. Earned total is summed straight from the
+   * AgentCommission ledger — NOT from getReferredPlayerStats' live,
+   * deposit-capped recalculation. That figure is fine for a "current
+   * standing" display, but it can shrink in real time (a referred player
+   * winning back their losses reduces net loss, and therefore the
+   * recomputed commission, right under an agent's feet) — wrong for money
+   * that's about to be settled/paid, which must only ever grow until it's
+   * actually paid out. The ledger is written once per losing bet and never
+   * revised, so it's the stable source settlement math needs.
    */
   async getWalletSummary(agentId: string) {
     const id = BigInt(agentId);
-    const [stats, settlements] = await Promise.all([
-      this.getReferredPlayerStats(agentId),
+    const [commissionTotal, settlements] = await Promise.all([
+      this.prisma.agentCommission.aggregate({
+        where: { agentId: id },
+        _sum: { commissionAmount: true },
+      }),
       this.prisma.agentSettlement.groupBy({
         by: ['status'],
         where: { agentId: id, status: { in: ['completed', 'pending'] } },
@@ -506,7 +510,7 @@ export class AgentsService {
       }),
     ]);
 
-    const totalEarnedCommission = stats.totals.commission;
+    const totalEarnedCommission = Number(commissionTotal._sum.commissionAmount ?? 0);
     const totalSettled = Number(
       settlements.find((s) => s.status === 'completed')?._sum.amount ?? 0,
     );
