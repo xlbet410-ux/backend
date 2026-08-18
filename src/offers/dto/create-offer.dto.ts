@@ -102,6 +102,29 @@ export class CreateOfferDto {
   @MaxLength(5000)
   termsEn?: string;
 
+  // One step per line — rendered as the Detail popup's "Steps to Claim" list.
+  @IsOptional()
+  @IsString()
+  @MaxLength(3000)
+  stepsToClaimBn?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(3000)
+  stepsToClaimEn?: string;
+
+  // One "Label | Value" row per line — rendered as the Detail popup's
+  // "Bonus Information" table.
+  @IsOptional()
+  @IsString()
+  @MaxLength(3000)
+  bonusInfoBn?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(3000)
+  bonusInfoEn?: string;
+
   @IsOptional()
   @IsBoolean()
   imageOnly?: boolean;

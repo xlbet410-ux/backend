@@ -78,6 +78,26 @@ export class UpdateOfferDto {
   termsEn?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(3000)
+  stepsToClaimBn?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(3000)
+  stepsToClaimEn?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(3000)
+  bonusInfoBn?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(3000)
+  bonusInfoEn?: string;
+
+  @IsOptional()
   @IsBoolean()
   imageOnly?: boolean;
 

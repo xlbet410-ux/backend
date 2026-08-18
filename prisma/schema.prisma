@@ -424,6 +424,15 @@ model Offer {
   termsBn       String? @map("terms_bn")
   termsEn       String? @map("terms_en")
 
+  // Rich Detail-popup content — one step per line / one "Label | Value" row
+  // per line respectively, parsed client-side (see bet app's
+  // OfferDetailModal). Null falls back to a heuristic derived from
+  // descriptionBn/En and rewardType/turnoverMultiplier.
+  stepsToClaimBn String? @map("steps_to_claim_bn")
+  stepsToClaimEn String? @map("steps_to_claim_en")
+  bonusInfoBn    String? @map("bonus_info_bn")
+  bonusInfoEn    String? @map("bonus_info_en")
+
   // When true, both the promotions-page card and the homepage popup render
   // ONLY the uploaded image — no title/description/reward badge/CTA text,
   // no padding around it. For a purely-graphic promo banner where the image
