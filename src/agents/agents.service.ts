@@ -581,6 +581,41 @@ export class AgentsService {
     });
   }
 
+  /**
+   * Staff-facing queue across every agent, not just one — pending requests
+   * sorted to the top (stable sort keeps each group's requestedAt-desc
+   * order) so nothing waiting for action gets buried under older resolved
+   * ones from more active agents.
+   */
+  async getAllSettlements(status?: string) {
+    const settlements = await this.prisma.agentSettlement.findMany({
+      where: status ? { status } : undefined,
+      include: {
+        agent: { select: { fullName: true, phoneNumber: true } },
+        confirmer: { select: { username: true } },
+      },
+      orderBy: { requestedAt: 'desc' },
+    });
+
+    const statusPriority: Record<string, number> = { pending: 0 };
+    const sorted = [...settlements].sort(
+      (a, b) => (statusPriority[a.status] ?? 1) - (statusPriority[b.status] ?? 1),
+    );
+
+    return sorted.map((s) => ({
+      id: s.id.toString(),
+      agentId: s.agentId.toString(),
+      agentName: s.agent.fullName,
+      agentPhone: s.agent.phoneNumber,
+      amount: s.amount.toString(),
+      status: s.status,
+      note: s.note,
+      requestedAt: s.requestedAt.toISOString(),
+      confirmedByUsername: s.confirmer?.username ?? null,
+      confirmedAt: s.confirmedAt?.toISOString() ?? null,
+    }));
+  }
+
   async getSettlementHistory(agentId: string) {
     const settlements = await this.prisma.agentSettlement.findMany({
       where: { agentId: BigInt(agentId) },

@@ -83,6 +83,14 @@ export class AgentsController {
     return this.agentsService.getSettlementHistory(id);
   }
 
+  // Staff-facing queue across every agent — not scoped to one id, so this
+  // must stay a distinct path segment count from ':id' routes above.
+  // ?status=pending|completed|rejected filters; omitted returns all.
+  @Get('wallet/settlements')
+  getAllSettlements(@Query('status') status?: string) {
+    return this.agentsService.getAllSettlements(status);
+  }
+
   // Agent requests payout of their own requestable balance.
   @Post(':id/wallet/settlements')
   requestSettlement(@Param('id') id: string, @Body() dto: RequestSettlementDto) {
