@@ -31,6 +31,15 @@ export class OffersController {
     return this.offersService.listForUser(undefined, category);
   }
 
+  // Public, independent of showInPromotionsPage — for dedicated pages (e.g.
+  // the Referral Program page's milestone ladder) that need a specific
+  // offer group even when those offers are deliberately kept off the
+  // general Promotions grid. Still isActive-gated.
+  @Get('by-group/:groupKey')
+  byGroup(@Param('groupKey') groupKey: string) {
+    return this.offersService.getOffersByGroupKey(groupKey);
+  }
+
   // Public — the homepage popup shows to guests too, not just logged-in
   // players.
   @Get('popup')

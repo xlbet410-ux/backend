@@ -626,6 +626,47 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
     return result;
   }
 
+  /**
+   * Active, in-window offers sharing a groupKey — independent of
+   * showInPromotionsPage, unlike listForUser, so a dedicated page (e.g. the
+   * Referral Program page's milestone ladder) can read a group of offers
+   * that are deliberately kept off the general Promotions grid. Ascending
+   * priority, since a ladder like the milestone offers uses priority ==
+   * the tier number and should read low-to-high, the opposite of every
+   * other priority-ordered list in this file.
+   */
+  async getOffersByGroupKey(groupKey: string) {
+    const now = new Date();
+    const offers = await this.prisma.offer.findMany({
+      where: {
+        isActive: true,
+        groupKey,
+        OR: [{ startsAt: null }, { startsAt: { lte: now } }],
+        AND: [{ OR: [{ endsAt: null }, { endsAt: { gte: now } }] }],
+      },
+      orderBy: { priority: 'asc' },
+    });
+
+    return offers.map((offer) => ({
+      id: offer.id.toString(),
+      slug: offer.slug,
+      titleBn: offer.titleBn,
+      titleEn: offer.titleEn,
+      descriptionBn: offer.descriptionBn,
+      descriptionEn: offer.descriptionEn,
+      triggerType: offer.triggerType,
+      triggerConfig: offer.triggerConfig,
+      rewardType: offer.rewardType,
+      rewardAmount: offer.rewardAmount?.toString() ?? null,
+      rewardCap: offer.rewardCap?.toString() ?? null,
+      turnoverMultiplier: offer.turnoverMultiplier.toString(),
+      bonusValidityDays: offer.bonusValidityDays,
+      maxClaimsPerUser: offer.maxClaimsPerUser,
+      termsBn: offer.termsBn,
+      termsEn: offer.termsEn,
+    }));
+  }
+
   /** Active, in-window offers flagged for the homepage popup, newest-priority first. */
   async getPopupOffers() {
     const now = new Date();
