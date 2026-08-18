@@ -13,6 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { SkipThrottle } from '@nestjs/throttler';
 import { timingSafeEqual } from 'crypto';
 import type { Request } from 'express';
 import { GamesService } from './games.service';
@@ -144,6 +145,16 @@ export class GamesController {
   // delete both once Oracle's dashboard is confirmed pointed at the new
   // /games/callback/:secret routes below and a real bet has round-tripped
   // successfully through them.
+  // Skip the global ThrottlerGuard — this is a server-to-server webhook
+  // Oracle calls once per settled bet across every player on the platform,
+  // not end-user traffic the throttle is meant to protect against. Even
+  // with per-visitor limiting correctly restored (see main.ts trust proxy),
+  // Oracle's aggregate callback volume during real play (auto-spin/turbo
+  // especially) can easily exceed a player-sized rate limit — and a
+  // throttled callback means Oracle never gets the updated balance it's
+  // waiting on, which is exactly what a "insufficient balance" symptom on
+  // the very next bet would look like from Oracle's side.
+  @SkipThrottle()
   @Get('games/callback')
   @HttpCode(HttpStatus.OK)
   ping(@Query() query: Record<string, unknown>) {
@@ -151,6 +162,7 @@ export class GamesController {
     return { status: 'OK' };
   }
 
+  @SkipThrottle()
   @Post('games/callback')
   @HttpCode(HttpStatus.OK)
   async callback(
@@ -167,6 +179,7 @@ export class GamesController {
   // The real fix: only someone who knows GAMES_CALLBACK_SECRET (set in env,
   // shared only with Oracle via this URL) can reach these. Point Oracle's
   // callback URL at these instead, then remove the two routes above.
+  @SkipThrottle()
   @Get('games/callback/:secret')
   @HttpCode(HttpStatus.OK)
   pingSecure(
@@ -178,6 +191,7 @@ export class GamesController {
     return { status: 'OK' };
   }
 
+  @SkipThrottle()
   @Post('games/callback/:secret')
   @HttpCode(HttpStatus.OK)
   async callbackSecure(
