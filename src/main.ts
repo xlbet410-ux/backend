@@ -7,6 +7,14 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
+  // Behind Coolify's Traefik reverse proxy, Express otherwise sees every
+  // request as coming from Traefik's own IP — collapsing the per-IP
+  // ThrottlerGuard limit below into one shared budget for the entire
+  // site's traffic instead of one budget per visitor. Trusting exactly one
+  // hop (Traefik) makes req.ip resolve to the real client IP from
+  // X-Forwarded-For again.
+  app.set('trust proxy', 1);
+
   app.enableCors({
     origin: [
       'https://2xlbet.com',
