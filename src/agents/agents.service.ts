@@ -300,15 +300,46 @@ export class AgentsService {
       if (!agent || !agent.isActive || agent.type !== 'commission') return;
       if (agent.commission.lessThanOrEqualTo(0)) return;
 
-      const commissionAmount = lossAmount.mul(agent.commission).div(100);
-      if (commissionAmount.lessThanOrEqualTo(0)) return;
+      // Commission is capped to this player's deposit ("principal"), not
+      // their raw loss — the same cap getReferredPlayerStats already shows
+      // everywhere in the CRM/agent dashboard (commissionBasis =
+      // min(cumulativeLoss, cumulativeDeposit)). Computed cumulatively and
+      // topped up by the difference each bet, rather than per-bet, so a
+      // player who keeps losing well past their deposit doesn't let the
+      // agent earn more than that cap — this bet's own commissionAmount is
+      // just whatever's left to credit once the cap is (or isn't yet) hit.
+      const [depositAgg, betsAgg, alreadyRecordedAgg] = await Promise.all([
+        this.prisma.cashTransaction.aggregate({
+          where: { userId: playerUserId, type: 'cash_in', status: 'completed' },
+          _sum: { amount: true },
+        }),
+        this.prisma.gameTransaction.aggregate({
+          where: { userId: playerUserId },
+          _sum: { betAmount: true, winAmount: true },
+        }),
+        this.prisma.agentCommission.aggregate({
+          where: { agentId: agent.id, playerId: playerUserId },
+          _sum: { commissionAmount: true },
+        }),
+      ]);
+
+      const cumulativeDeposit = depositAgg._sum.amount ?? new Prisma.Decimal(0);
+      const cumulativeWagered = betsAgg._sum.betAmount ?? new Prisma.Decimal(0);
+      const cumulativeWon = betsAgg._sum.winAmount ?? new Prisma.Decimal(0);
+      const cumulativeLoss = Prisma.Decimal.max(0, cumulativeWagered.sub(cumulativeWon));
+      const cappedBasis = Prisma.Decimal.min(cumulativeLoss, cumulativeDeposit);
+      const totalOwed = cappedBasis.mul(agent.commission).div(100);
+      const alreadyRecorded = alreadyRecordedAgg._sum.commissionAmount ?? new Prisma.Decimal(0);
+      const commissionAmount = Prisma.Decimal.max(0, totalOwed.sub(alreadyRecorded));
 
       // Dedup via the unique constraint on sourceGameTransactionId — a
       // retried/concurrent callback for the same bet hits this and is
-      // caught below, never recorded twice. No balance to credit here (an
-      // Agent has no in-platform wallet, unlike a referring player) — this
-      // is a reporting-only ledger the agent/CRM read from, see
-      // getReferredPlayerStats.
+      // caught below, never recorded twice. Still written even when
+      // commissionAmount is 0 (cap already reached) so the audit trail
+      // shows this bet was seen, not silently skipped. No balance to
+      // credit here (an Agent has no in-platform wallet, unlike a
+      // referring player) — this is a reporting-only ledger the agent/CRM
+      // read from, see getReferredPlayerStats and getWalletSummary.
       await this.prisma.agentCommission.create({
         data: {
           agentId: agent.id,
