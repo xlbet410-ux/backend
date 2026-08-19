@@ -191,16 +191,28 @@ const UPDATES = [
     ].join("\n"),
     termsEn: "Resets daily at 10:30 PM BST; JILI Slots only. Bonus expires in 3 days if unwagered; general terms apply.",
   },
-  // refer-earn-1000 already has titleEn/descriptionEn/bonusInfoEn/termsEn
-  // from an earlier fix — only stepsToClaimEn was still missing.
   {
     slug: "refer-earn-1000",
+    titleEn: "Refer & Earn ৳1,000 Bonus",
+    descriptionEn: "Invite friends and share a ৳1,000 referral reward together (৳500 each).",
     stepsToClaimEn: [
       "Sign up and verify your phone/email.",
       "Share your referral link or code.",
       "Your friend registers using that code.",
       "You both receive ৳500 once your friend completes deposit + turnover within 7 days.",
     ].join("\n"),
+    bonusInfoEn: [
+      "Bonus Type | Referral",
+      "Game Type | Slots & Casino",
+      "Friend's Min Deposit | ৳1,000",
+      "Friend's Turnover | ৳8,000",
+      "Your Bonus | ৳500",
+      "Wager | 16x",
+      "Referral Limit | Unlimited",
+      "Repetition | Unlimited",
+    ].join("\n"),
+    termsEn:
+      "Your friend must complete deposit + turnover within 7 days of registration. The reward credits once conditions are met; general terms apply.",
   },
 ];
 
