@@ -559,7 +559,7 @@ export class AgentsService {
       this.prisma.agentSettlement.groupBy({
         by: ['status'],
         where: { agentId: id, status: { in: ['completed', 'pending'] } },
-        _sum: { amount: true },
+        _sum: { amount: true, platformAmount: true },
       }),
     ]);
 
@@ -590,9 +590,28 @@ export class AgentsService {
     const walletBalance = Math.max(0, totalEarnedCommission - totalSettled);
     const requestableBalance = Math.max(0, walletBalance - pendingAmount);
 
+    // Same earned/settled/pending/balance shape as the commission fields
+    // above, but for the platform's own share — totalPlatformAmount only
+    // ever grows (ledger-derived), while platformSettled is what's actually
+    // been recorded as settled via completed AgentSettlement rows. Whatever
+    // isn't settled or already pending is "due": it carries forward as the
+    // default (editable) platform amount on the agent's next request.
+    const platformSettled = Number(
+      settlements.find((s) => s.status === 'completed')?._sum.platformAmount ?? 0,
+    );
+    const platformPendingAmount = Number(
+      settlements.find((s) => s.status === 'pending')?._sum.platformAmount ?? 0,
+    );
+    const platformBalance = Math.max(0, totalPlatformAmount - platformSettled);
+    const platformRequestableBalance = Math.max(0, platformBalance - platformPendingAmount);
+
     return {
       totalEarnedCommission,
       totalPlatformAmount,
+      platformSettled,
+      platformPendingAmount,
+      platformBalance,
+      platformRequestableBalance,
       totalSettled,
       pendingAmount,
       walletBalance,
@@ -600,8 +619,22 @@ export class AgentsService {
     };
   }
 
-  /** Agent-initiated: request payout of some or all of their requestable balance. */
-  async requestSettlement(agentId: string, amount: number, note?: string) {
+  /**
+   * Agent-initiated: request payout of some or all of their requestable
+   * commission balance, plus — alongside it — how much of the platform's
+   * own outstanding balance to record as settled. platformAmount defaults
+   * to the full platformRequestableBalance (the entire "due" figure) but
+   * the agent may edit it down; whatever's left over stays "due" and shows
+   * up as the new default on their next request (it's just
+   * platformRequestableBalance recomputed fresh each time, not a separate
+   * stored running total).
+   */
+  async requestSettlement(
+    agentId: string,
+    amount: number,
+    note?: string,
+    platformAmount?: number,
+  ) {
     if (amount <= 0) {
       throw new BadRequestException('Settlement amount must be greater than zero.');
     }
@@ -612,10 +645,21 @@ export class AgentsService {
       );
     }
 
+    const resolvedPlatformAmount = platformAmount ?? summary.platformRequestableBalance;
+    if (resolvedPlatformAmount < 0) {
+      throw new BadRequestException('Platform amount cannot be negative.');
+    }
+    if (resolvedPlatformAmount > summary.platformRequestableBalance) {
+      throw new BadRequestException(
+        `Platform amount can be at most ৳${summary.platformRequestableBalance.toFixed(2)} right now.`,
+      );
+    }
+
     return this.prisma.agentSettlement.create({
       data: {
         agentId: BigInt(agentId),
         amount: new Prisma.Decimal(amount),
+        platformAmount: new Prisma.Decimal(resolvedPlatformAmount),
         note: note?.trim() || null,
       },
     });
@@ -713,12 +757,13 @@ export class AgentsService {
       agentName: s.agent.fullName,
       agentPhone: s.agent.phoneNumber,
       amount: s.amount.toString(),
-      // The platform's corresponding share of this same settlement amount,
-      // at the agent's CURRENT commission rate — a settlement request isn't
-      // tied to specific ledger rows, so unlike totalPlatformAmount above
-      // there's no per-row historical rate to use. Null when the agent has
-      // no commission rate (e.g. a personal-type agent) to derive it from.
-      platformAmount: computePlatformAmount(s.amount, s.agent.commission),
+      // The agent's actual chosen figure at request time, since this is now
+      // a real column they edit in the Settle modal — not derived. Legacy
+      // rows from before this column existed fall back to the old
+      // proportional-at-current-rate estimate so they don't just show "—".
+      platformAmount: s.platformAmount !== null
+        ? s.platformAmount.toString()
+        : computePlatformAmount(s.amount, s.agent.commission),
       status: s.status,
       note: s.note,
       requestedAt: s.requestedAt.toISOString(),
@@ -741,7 +786,9 @@ export class AgentsService {
     return settlements.map((s) => ({
       id: s.id.toString(),
       amount: s.amount.toString(),
-      platformAmount: computePlatformAmount(s.amount, agent?.commission),
+      platformAmount: s.platformAmount !== null
+        ? s.platformAmount.toString()
+        : computePlatformAmount(s.amount, agent?.commission),
       status: s.status,
       note: s.note,
       requestedAt: s.requestedAt.toISOString(),

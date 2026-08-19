@@ -376,6 +376,12 @@ model AgentSettlement {
   id          BigInt    @id @default(autoincrement())
   agentId     BigInt    @map("agent_id")
   amount      Decimal   @db.Decimal(14, 2)
+  // The platform's share being settled/reconciled alongside this agent
+  // commission payout — agent-editable at request time (defaults to the
+  // full outstanding platform balance; edited down, the shortfall carries
+  // forward as "due" on the agent's next request). Null on legacy rows
+  // created before this column existed.
+  platformAmount Decimal? @map("platform_amount") @db.Decimal(14, 2)
   status      String    @default("pending") @db.VarChar(20) // 'pending' | 'completed' | 'rejected'
   note        String?   @db.VarChar(500)
   requestedAt DateTime  @default(now()) @map("requested_at") @db.Timestamptz

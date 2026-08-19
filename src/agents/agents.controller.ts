@@ -99,10 +99,11 @@ export class AgentsController {
     return this.agentsService.getCommissionSummary(query.period, query.date);
   }
 
-  // Agent requests payout of their own requestable balance.
+  // Agent requests payout of their own requestable balance, plus how much
+  // of the platform's outstanding balance to record as settled alongside it.
   @Post(':id/wallet/settlements')
   requestSettlement(@Param('id') id: string, @Body() dto: RequestSettlementDto) {
-    return this.agentsService.requestSettlement(id, dto.amount, dto.note);
+    return this.agentsService.requestSettlement(id, dto.amount, dto.note, dto.platformAmount);
   }
 
   // Staff confirms/rejects a pending request — looked up by its own id,
