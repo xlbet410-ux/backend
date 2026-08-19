@@ -444,7 +444,7 @@ export class AgentsService {
     if (players.length === 0) {
       return {
         players: [],
-        totals: { deposit: 0, withdraw: 0, wagered: 0, won: 0, loss: 0, commission: 0 },
+        totals: { deposit: 0, withdraw: 0, wagered: 0, won: 0, loss: 0, commission: 0, adminAmount: 0 },
       };
     }
     const commissionRate = Number(agent?.commission ?? 0);
@@ -487,6 +487,12 @@ export class AgentsService {
       // bets), but the agent's cut never exceeds deposit * rate. Total Loss
       // itself is shown uncapped, unchanged, for transparency.
       const commissionBasis = Math.min(loss, deposit);
+      const commission = (commissionBasis * commissionRate) / 100;
+      // The platform's retained share of the same capped basis — whatever
+      // isn't paid out as agent commission. Purely a display figure derived
+      // from the existing commissionBasis/commission numbers above; doesn't
+      // feed into any payout calculation.
+      const adminAmount = commissionBasis - commission;
       return {
         id: key,
         fullName: p.fullName,
@@ -497,7 +503,8 @@ export class AgentsService {
         wagered,
         won,
         loss,
-        commission: (commissionBasis * commissionRate) / 100,
+        commission,
+        adminAmount,
       };
     });
 
@@ -509,8 +516,9 @@ export class AgentsService {
         won: acc.won + r.won,
         loss: acc.loss + r.loss,
         commission: acc.commission + r.commission,
+        adminAmount: acc.adminAmount + r.adminAmount,
       }),
-      { deposit: 0, withdraw: 0, wagered: 0, won: 0, loss: 0, commission: 0 },
+      { deposit: 0, withdraw: 0, wagered: 0, won: 0, loss: 0, commission: 0, adminAmount: 0 },
     );
 
     return { players: rows, totals };
