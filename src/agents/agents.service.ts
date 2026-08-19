@@ -16,6 +16,20 @@ import { AgentChangePasswordDto } from './dto/agent-change-password.dto';
 
 const SALT_ROUNDS = 10;
 
+// Platform's share of a given amount at a given commission rate — the
+// complement of whatever the agent's cut is (rate% to the agent, (100-rate)%
+// to the platform), same formula used throughout this file for the
+// wallet/referral-stats platform-amount figures. Returns null when there's
+// no rate to derive it from (e.g. a personal-type agent with commission 0).
+function computePlatformAmount(
+  amount: Prisma.Decimal,
+  rate: Prisma.Decimal | null | undefined,
+): string | null {
+  const rateNum = Number(rate ?? 0);
+  if (rateNum <= 0) return null;
+  return ((Number(amount) * (100 - rateNum)) / rateNum).toString();
+}
+
 type AgentRow = {
   id: bigint;
   fullName: string;
@@ -682,7 +696,7 @@ export class AgentsService {
     const settlements = await this.prisma.agentSettlement.findMany({
       where: status ? { status } : undefined,
       include: {
-        agent: { select: { fullName: true, phoneNumber: true } },
+        agent: { select: { fullName: true, phoneNumber: true, commission: true } },
         confirmer: { select: { username: true } },
       },
       orderBy: { requestedAt: 'desc' },
@@ -699,6 +713,12 @@ export class AgentsService {
       agentName: s.agent.fullName,
       agentPhone: s.agent.phoneNumber,
       amount: s.amount.toString(),
+      // The platform's corresponding share of this same settlement amount,
+      // at the agent's CURRENT commission rate — a settlement request isn't
+      // tied to specific ledger rows, so unlike totalPlatformAmount above
+      // there's no per-row historical rate to use. Null when the agent has
+      // no commission rate (e.g. a personal-type agent) to derive it from.
+      platformAmount: computePlatformAmount(s.amount, s.agent.commission),
       status: s.status,
       note: s.note,
       requestedAt: s.requestedAt.toISOString(),
@@ -708,15 +728,20 @@ export class AgentsService {
   }
 
   async getSettlementHistory(agentId: string) {
-    const settlements = await this.prisma.agentSettlement.findMany({
-      where: { agentId: BigInt(agentId) },
-      include: { confirmer: { select: { username: true } } },
-      orderBy: { requestedAt: 'desc' },
-    });
+    const id = BigInt(agentId);
+    const [agent, settlements] = await Promise.all([
+      this.prisma.agent.findUnique({ where: { id }, select: { commission: true } }),
+      this.prisma.agentSettlement.findMany({
+        where: { agentId: id },
+        include: { confirmer: { select: { username: true } } },
+        orderBy: { requestedAt: 'desc' },
+      }),
+    ]);
 
     return settlements.map((s) => ({
       id: s.id.toString(),
       amount: s.amount.toString(),
+      platformAmount: computePlatformAmount(s.amount, agent?.commission),
       status: s.status,
       note: s.note,
       requestedAt: s.requestedAt.toISOString(),
