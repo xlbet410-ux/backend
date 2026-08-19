@@ -537,10 +537,10 @@ export class AgentsService {
    */
   async getWalletSummary(agentId: string) {
     const id = BigInt(agentId);
-    const [commissionTotal, settlements] = await Promise.all([
-      this.prisma.agentCommission.aggregate({
+    const [commissionRows, settlements] = await Promise.all([
+      this.prisma.agentCommission.findMany({
         where: { agentId: id },
-        _sum: { commissionAmount: true },
+        select: { commissionAmount: true, commissionRate: true },
       }),
       this.prisma.agentSettlement.groupBy({
         by: ['status'],
@@ -549,7 +549,24 @@ export class AgentsService {
       }),
     ]);
 
-    const totalEarnedCommission = Number(commissionTotal._sum.commissionAmount ?? 0);
+    const totalEarnedCommission = commissionRows.reduce(
+      (sum, r) => sum + Number(r.commissionAmount),
+      0,
+    );
+    // The platform's retained share of this same ledger — mirrors
+    // getReferredPlayerStats' adminAmount (commissionBasis - commission),
+    // but derived straight from each row's own recorded commissionAmount
+    // and commissionRate rather than a fresh basis lookup: since
+    // commissionAmount = basisIncrement * rate/100 by construction (see
+    // recordLossCommission), basisIncrement - commissionAmount reduces to
+    // commissionAmount * (100 - rate) / rate. Using each row's own stored
+    // rate (not the agent's current rate) keeps already-earned rows correct
+    // even if the agent's rate was changed later.
+    const totalPlatformAmount = commissionRows.reduce((sum, r) => {
+      const rate = Number(r.commissionRate);
+      if (rate <= 0) return sum;
+      return sum + (Number(r.commissionAmount) * (100 - rate)) / rate;
+    }, 0);
     const totalSettled = Number(
       settlements.find((s) => s.status === 'completed')?._sum.amount ?? 0,
     );
@@ -559,7 +576,14 @@ export class AgentsService {
     const walletBalance = Math.max(0, totalEarnedCommission - totalSettled);
     const requestableBalance = Math.max(0, walletBalance - pendingAmount);
 
-    return { totalEarnedCommission, totalSettled, pendingAmount, walletBalance, requestableBalance };
+    return {
+      totalEarnedCommission,
+      totalPlatformAmount,
+      totalSettled,
+      pendingAmount,
+      walletBalance,
+      requestableBalance,
+    };
   }
 
   /** Agent-initiated: request payout of some or all of their requestable balance. */
@@ -618,6 +642,34 @@ export class AgentsService {
       where: { id: settlement.id },
       data: { status, confirmedBy: confirmer.id, confirmedAt: new Date() },
     });
+  }
+
+  /**
+   * Cross-agent commission split for the staff settlement queue: how much
+   * every commission-type agent earned in total vs. how much the platform
+   * kept, over an optional day/week/month window (same resolvePeriodRange
+   * used by getReferredPlayerStats). Sourced from the AgentCommission
+   * ledger (when commission was actually earned), not AgentSettlement (when
+   * it was paid out) — matches getWalletSummary's per-agent totalPlatformAmount
+   * formula, just aggregated across every agent instead of one.
+   */
+  async getCommissionSummary(period?: 'day' | 'week' | 'month', date?: string) {
+    const range = this.resolvePeriodRange(period, date);
+    const rows = await this.prisma.agentCommission.findMany({
+      where: range ? { createdAt: { gte: range.from, lt: range.to } } : {},
+      select: { commissionAmount: true, commissionRate: true },
+    });
+
+    let totalCommission = 0;
+    let totalPlatformAmount = 0;
+    for (const r of rows) {
+      const commission = Number(r.commissionAmount);
+      const rate = Number(r.commissionRate);
+      totalCommission += commission;
+      if (rate > 0) totalPlatformAmount += (commission * (100 - rate)) / rate;
+    }
+
+    return { totalCommission, totalPlatformAmount };
   }
 
   /**

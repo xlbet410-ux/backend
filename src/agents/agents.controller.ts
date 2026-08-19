@@ -91,6 +91,14 @@ export class AgentsController {
     return this.agentsService.getAllSettlements(status);
   }
 
+  // Cross-agent commission vs. platform split for the staff settlement
+  // queue. ?period=day|week|month (optionally &date=YYYY-MM-DD for day)
+  // restricts to that window; omitted = all-time.
+  @Get('wallet/commission-summary')
+  getCommissionSummary(@Query() query: GetReferralsQueryDto) {
+    return this.agentsService.getCommissionSummary(query.period, query.date);
+  }
+
   // Agent requests payout of their own requestable balance.
   @Post(':id/wallet/settlements')
   requestSettlement(@Param('id') id: string, @Body() dto: RequestSettlementDto) {
