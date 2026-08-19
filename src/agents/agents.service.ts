@@ -655,7 +655,7 @@ export class AgentsService {
       );
     }
 
-    return this.prisma.agentSettlement.create({
+    const created = await this.prisma.agentSettlement.create({
       data: {
         agentId: BigInt(agentId),
         amount: new Prisma.Decimal(amount),
@@ -663,6 +663,20 @@ export class AgentsService {
         note: note?.trim() || null,
       },
     });
+
+    // Serialize explicitly rather than returning the raw Prisma row — its
+    // id/agentId are BigInt, which JSON.stringify can't handle and throws
+    // on, turning a successful write into a 500 response (the row is
+    // already committed by then, so a page refresh shows it went through).
+    return {
+      id: created.id.toString(),
+      agentId: created.agentId.toString(),
+      amount: created.amount.toString(),
+      platformAmount: created.platformAmount?.toString() ?? null,
+      status: created.status,
+      note: created.note,
+      requestedAt: created.requestedAt.toISOString(),
+    };
   }
 
   /** Staff-initiated: confirm a pending settlement request as paid. */
@@ -696,10 +710,26 @@ export class AgentsService {
       throw new NotFoundException('Reviewer account not found.');
     }
 
-    return this.prisma.agentSettlement.update({
+    const updated = await this.prisma.agentSettlement.update({
       where: { id: settlement.id },
       data: { status, confirmedBy: confirmer.id, confirmedAt: new Date() },
     });
+
+    // Serialize explicitly — see the matching comment in requestSettlement.
+    // The raw row's id/agentId/confirmedBy are BigInt, which JSON.stringify
+    // throws on; the update above already committed by the time that
+    // throw happens, which is exactly why a page refresh shows it worked.
+    return {
+      id: updated.id.toString(),
+      agentId: updated.agentId.toString(),
+      amount: updated.amount.toString(),
+      platformAmount: updated.platformAmount?.toString() ?? null,
+      status: updated.status,
+      note: updated.note,
+      requestedAt: updated.requestedAt.toISOString(),
+      confirmedByUsername: confirmer.username,
+      confirmedAt: updated.confirmedAt?.toISOString() ?? null,
+    };
   }
 
   /**
