@@ -27,7 +27,13 @@ async function bootstrap() {
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    // x-api-key: most CRM API calls happen server-side (Server
+    // Components/Actions), which never hits CORS at all — but the offer
+    // form's live game search (EligibleGamesPicker) calls the backend
+    // straight from the browser, and the preflight was rejecting that
+    // header, silently failing every search (games/catalog/search itself
+    // has no auth guard, so this is purely a CORS allow-list gap).
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key'],
   });
 
   app.useGlobalPipes(
