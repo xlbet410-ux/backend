@@ -90,7 +90,17 @@ export class CreateOfferDto {
   @IsOptional()
   @IsString()
   @MaxLength(500)
+  imageUrlEn?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
   bannerUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  bannerUrlEn?: string;
 
   @IsOptional()
   @IsString()

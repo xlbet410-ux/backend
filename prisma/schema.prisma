@@ -426,7 +426,9 @@ model Offer {
   descriptionBn String? @map("description_bn")
   descriptionEn String? @map("description_en")
   imageUrl      String? @map("image_url") @db.VarChar(500)
+  imageUrlEn    String? @map("image_url_en") @db.VarChar(500)
   bannerUrl     String? @map("banner_url") @db.VarChar(500)
+  bannerUrlEn   String? @map("banner_url_en") @db.VarChar(500)
   termsBn       String? @map("terms_bn")
   termsEn       String? @map("terms_en")
 
@@ -537,7 +539,7 @@ model Offer {
   // offer can power a deposit-page trigger without ever being listed.
   showInPromotionsPage Boolean @default(true) @map("show_in_promotions_page")
   showInPopup          Boolean @default(false) @map("show_in_popup")
-  // Homepage popup only — bannerUrl above doubles as the popup's big image.
+  // Homepage popup only — bannerUrl/bannerUrlEn above double as the popup's big image.
   popupPriority  Int     @default(0) @map("popup_priority")
   popupCtaTextBn String? @map("popup_cta_text_bn") @db.VarChar(50)
   popupCtaTextEn String? @map("popup_cta_text_en") @db.VarChar(50)
