@@ -858,3 +858,30 @@ model Notification {
   @@index([userId, createdAt])
   @@map("notifications")
 }
+
+// Staff-editable per-game fixes layered on top of Oracle's live catalog
+// (never stored wholesale — the catalog itself stays a 10-minute in-memory
+// cache fetched straight from Oracle, see GamesService). gameUid is the
+// game's real/canonical uid as Oracle's catalog reports it — the lookup
+// key used everywhere else in the app (GameTransaction, history, category
+// counts). overrideGameUid is a *different* uid Oracle wants used only for
+// the actual /getgameurl launch call (e.g. a country-specific variant) —
+// GamesService substitutes it going out and translates Oracle's callback
+// back to the real gameUid coming in, so nothing outside the launch/
+// callback boundary ever sees the substitute uid. overrideThumbnail
+// replaces a broken image URL. name/providerName are cached only so the
+// CRM's game list still shows something meaningful for a game that's
+// since disappeared from Oracle's own catalog.
+model GameOverride {
+  id                BigInt   @id @default(autoincrement())
+  gameUid           String   @unique @map("game_uid") @db.VarChar(200)
+  name              String?  @db.VarChar(200)
+  providerName      String?  @map("provider_name") @db.VarChar(100)
+  overrideGameUid   String?  @map("override_game_uid") @db.VarChar(200)
+  overrideThumbnail String?  @map("override_thumbnail") @db.VarChar(500)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([overrideGameUid])
+  @@map("game_overrides")
+}

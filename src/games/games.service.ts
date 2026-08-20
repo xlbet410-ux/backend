@@ -68,6 +68,11 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     null;
   private buildingPromise: Promise<CatalogGame[]> | null = null;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
+  // overrideGameUid -> real gameUid, rebuilt alongside the catalog cache —
+  // lets handleCallback translate Oracle's callback (which echoes back
+  // whatever uid launchGame actually sent it) back to the real/canonical
+  // uid without a DB query on every single settled bet.
+  private overrideReverseMap: Map<string, string> = new Map();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -142,9 +147,10 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
 
   async launchGame(userId: string, gameUid: string) {
     const id = BigInt(userId);
-    const [user, gameAccount] = await Promise.all([
+    const [user, gameAccount, override] = await Promise.all([
       this.prisma.user.findUniqueOrThrow({ where: { id } }),
       this.ensureGameAccount(id),
+      this.prisma.gameOverride.findUnique({ where: { gameUid } }),
     ]);
 
     const amount = Number(user.balance);
@@ -152,7 +158,12 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('Please deposit funds before playing.');
     }
 
-    const payload = { username: gameAccount, amount, game_uid: gameUid };
+    // A country-specific (or otherwise substitute) uid Oracle wants used
+    // only for the actual launch call — see the GameOverride model comment.
+    // Everything else (catalog, history, GameTransaction) keeps using the
+    // real gameUid; handleCallback translates Oracle's response back.
+    const launchGameUid = override?.overrideGameUid || gameUid;
+    const payload = { username: gameAccount, amount, game_uid: launchGameUid };
     const isDev = process.env.NODE_ENV !== 'production';
 
     type OracleLaunchResponse = {
@@ -332,7 +343,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
 
   private async buildCatalog(): Promise<CatalogGame[]> {
     const started = Date.now();
-    const [providers, featuredUids] = await Promise.all([
+    const [providers, featuredUids, overrides] = await Promise.all([
       this.getProviders() as Promise<
         Array<{ code: string; name: string; status: number }>
       >,
@@ -342,10 +353,23 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
         );
         return new Set<string>();
       }),
+      this.prisma.gameOverride.findMany().catch((err) => {
+        this.logger.warn(
+          `Catalog build: couldn't load game overrides (${(err as Error).message})`,
+        );
+        return [] as Awaited<ReturnType<typeof this.prisma.gameOverride.findMany>>;
+      }),
     ]);
     const active = Array.isArray(providers)
       ? providers.filter((p) => p.status === 1)
       : [];
+
+    const overrideByUid = new Map(overrides.map((o) => [o.gameUid, o]));
+    const nextReverseMap = new Map<string, string>();
+    for (const o of overrides) {
+      if (o.overrideGameUid) nextReverseMap.set(o.overrideGameUid, o.gameUid);
+    }
+    this.overrideReverseMap = nextReverseMap;
 
     const out: CatalogGame[] = [];
     for (const provider of active) {
@@ -378,6 +402,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
                     ? 'cards'
                     : categorizeGame(g.category, provider.code, provider.name),
               ];
+          const override = overrideByUid.get(g.game_uid);
           for (const category of categories) {
             out.push({
               name: g.name,
@@ -388,8 +413,9 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
               featured: featuredUids.has(g.game_uid),
               hotGames: pinnedHotGamesIndex(g.name, provider.code) !== null,
               subTags: computeSubTags(g.name, g.category),
-              thumbnail: g.thumbnail,
-              original: g.original,
+              // Staff-set replacement for a broken image — see GameOverride.
+              thumbnail: override?.overrideThumbnail || g.thumbnail,
+              original: override?.overrideThumbnail || g.original,
             });
           }
         }
@@ -698,10 +724,15 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       serial_number,
       bet_amount,
       win_amount,
-      game_uid,
       game_round,
       currency_code,
     } = payload;
+    // If this bet was launched with a substitute uid (see GameOverride /
+    // launchGame), Oracle's callback echoes that substitute back — translate
+    // it back to the real/canonical gameUid so GameTransaction, history, and
+    // category lookups all stay keyed the same way regardless of whether an
+    // override was involved.
+    const game_uid = this.overrideReverseMap.get(payload.game_uid) ?? payload.game_uid;
     if (!member_account || !serial_number) {
       throw new BadRequestException(
         'member_account and serial_number are required.',
@@ -853,5 +884,109 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       }
       throw err;
     }
+  }
+
+  // --- Admin (CRM) — Games section ---
+  // Reads merge the live Oracle catalog (unpaginated in memory) with the
+  // small game_overrides table; writes only ever touch game_overrides —
+  // the catalog itself is never written to, matching how every other
+  // catalog consumer in this file works (10-minute cache, refreshed from
+  // Oracle, never persisted).
+
+  async adminListGames(params: { q?: string; page?: number; pageSize?: number }) {
+    const catalog = await this.ensureCatalog();
+
+    // Catalog can list the same gameUid more than once (a title forced into
+    // two categories — see buildCatalog's pinned-category comment); the
+    // admin list is about the game itself, not per-category rows.
+    const seen = new Set<string>();
+    const deduped: CatalogGame[] = [];
+    for (const g of catalog) {
+      if (seen.has(g.gameUid)) continue;
+      seen.add(g.gameUid);
+      deduped.push(g);
+    }
+
+    const q = params.q?.trim().toLowerCase();
+    const filtered = q
+      ? deduped.filter(
+          (g) => g.name.toLowerCase().includes(q) || g.gameUid.toLowerCase().includes(q),
+        )
+      : deduped;
+
+    const page = params.page ?? 1;
+    const pageSize = Math.min(params.pageSize ?? 50, 200);
+    const total = filtered.length;
+    const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize);
+
+    const overrides = await this.prisma.gameOverride.findMany({
+      where: { gameUid: { in: pageRows.map((g) => g.gameUid) } },
+    });
+    const overrideByUid = new Map(overrides.map((o) => [o.gameUid, o]));
+
+    return {
+      total,
+      games: pageRows.map((g) => {
+        const override = overrideByUid.get(g.gameUid);
+        return {
+          gameUid: g.gameUid,
+          name: g.name,
+          providerName: g.providerName,
+          category: g.category,
+          thumbnail: g.thumbnail,
+          overrideGameUid: override?.overrideGameUid ?? null,
+          overrideThumbnail: override?.overrideThumbnail ?? null,
+        };
+      }),
+    };
+  }
+
+  async adminSetGameOverride(
+    gameUid: string,
+    dto: { overrideGameUid?: string | null; overrideThumbnail?: string | null; name?: string; providerName?: string },
+  ) {
+    const overrideGameUid = dto.overrideGameUid?.trim() || null;
+    const overrideThumbnail = dto.overrideThumbnail?.trim() || null;
+
+    if (!overrideGameUid && !overrideThumbnail) {
+      // Nothing left to override — remove the row instead of leaving an
+      // empty one behind.
+      await this.prisma.gameOverride.deleteMany({ where: { gameUid } });
+      // Same immediate-rebuild reasoning as the upsert branch below —
+      // otherwise the stale override (wrong image/uid) keeps being served
+      // from the in-memory catalog for up to 10 more minutes after staff
+      // clear it.
+      void this.rebuildCatalog();
+      return { gameUid, overrideGameUid: null, overrideThumbnail: null };
+    }
+
+    const saved = await this.prisma.gameOverride.upsert({
+      where: { gameUid },
+      create: {
+        gameUid,
+        name: dto.name,
+        providerName: dto.providerName,
+        overrideGameUid,
+        overrideThumbnail,
+      },
+      update: {
+        overrideGameUid,
+        overrideThumbnail,
+        ...(dto.name ? { name: dto.name } : {}),
+        ...(dto.providerName ? { providerName: dto.providerName } : {}),
+      },
+    });
+
+    // The launch/callback path (overrideReverseMap) and catalog thumbnails
+    // both read from the cache built at the last 10-minute refresh — force
+    // an immediate rebuild so a staff edit takes effect right away instead
+    // of waiting up to 10 minutes.
+    void this.rebuildCatalog();
+
+    return {
+      gameUid: saved.gameUid,
+      overrideGameUid: saved.overrideGameUid,
+      overrideThumbnail: saved.overrideThumbnail,
+    };
   }
 }

@@ -7,6 +7,7 @@ import {
   Logger,
   NotFoundException,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -25,8 +26,11 @@ import {
 import { SearchCatalogQueryDto } from './dto/search-catalog.dto';
 import { GetCategoryProvidersDto } from './dto/get-category-providers.dto';
 import { GetProviderCatalogDto } from './dto/get-provider-catalog.dto';
+import { AdminListGamesQueryDto } from './dto/admin-list-games.dto';
+import { SetGameOverrideDto } from './dto/set-game-override.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
+import { ApiKeyGuard } from '../common/guards/api-key.guard';
 
 @Controller()
 export class GamesController {
@@ -204,5 +208,22 @@ export class GamesController {
       `POST callback received (secured) from ${req.ip}: ${JSON.stringify(body)}`,
     );
     return this.gamesService.handleCallback(body);
+  }
+
+  // --- Admin (CRM) — Games section ---
+
+  @UseGuards(ApiKeyGuard)
+  @Get('games/admin/list')
+  adminListGames(@Query() query: AdminListGamesQueryDto) {
+    return this.gamesService.adminListGames(query);
+  }
+
+  @UseGuards(ApiKeyGuard)
+  @Patch('games/admin/:gameUid/override')
+  adminSetGameOverride(
+    @Param('gameUid') gameUid: string,
+    @Body() dto: SetGameOverrideDto,
+  ) {
+    return this.gamesService.adminSetGameOverride(gameUid, dto);
   }
 }
