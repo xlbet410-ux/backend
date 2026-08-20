@@ -618,6 +618,11 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
         rewardMax: offer.rewardMax?.toString() ?? null,
         turnoverMultiplier: offer.turnoverMultiplier.toString(),
         bonusValidityDays: offer.bonusValidityDays,
+        // Which game category this offer is restricted to (if any) — read
+        // by the bet app's Promotions page to build its game-section
+        // filter tabs (Slots, Live Casino, etc.) straight from real offer
+        // data, alongside the existing category/turnover-eligibility use.
+        eligibleGames: offer.eligibleGames,
         alreadyClaimed,
         eligible,
         priority: offer.priority,
