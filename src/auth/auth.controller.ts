@@ -14,6 +14,9 @@ import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { ForgotPasswordSendOtpDto } from './dto/forgot-password-send-otp.dto';
+import { ForgotPasswordVerifyOtpDto } from './dto/forgot-password-verify-otp.dto';
+import { ForgotPasswordResetDto } from './dto/forgot-password-reset.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 @Controller('auth')
@@ -52,5 +55,30 @@ export class AuthController {
     @Body() dto: ChangePasswordDto,
   ) {
     return this.authService.changePassword(req.user.userId, dto);
+  }
+
+  // --- Forgot password (unauthenticated) — mirrors the throttle shape of
+  // login/register above, since this is just as much a brute-force/abuse
+  // target as they are.
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('forgot-password/send-otp')
+  @HttpCode(HttpStatus.OK)
+  forgotPasswordSendOtp(@Body() dto: ForgotPasswordSendOtpDto) {
+    return this.authService.requestPasswordReset(dto.phoneNumber);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('forgot-password/verify-otp')
+  @HttpCode(HttpStatus.OK)
+  forgotPasswordVerifyOtp(@Body() dto: ForgotPasswordVerifyOtpDto) {
+    return this.authService.verifyPasswordResetOtp(dto.phoneNumber, dto.code);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('forgot-password/reset')
+  @HttpCode(HttpStatus.OK)
+  forgotPasswordReset(@Body() dto: ForgotPasswordResetDto) {
+    return this.authService.resetPasswordWithOtp(dto.phoneNumber, dto.newPassword);
   }
 }

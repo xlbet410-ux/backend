@@ -8,6 +8,7 @@ import { OffersModule } from '../offers/offers.module';
 import { ReferralModule } from '../referral/referral.module';
 import { LoginStreakModule } from '../login-streak/login-streak.module';
 import { AgentsModule } from '../agents/agents.module';
+import { OtpModule } from '../otp/otp.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { AgentsModule } from '../agents/agents.module';
     ReferralModule,
     LoginStreakModule,
     AgentsModule,
+    OtpModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

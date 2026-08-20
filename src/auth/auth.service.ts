@@ -2,6 +2,7 @@ import {
   ConflictException,
   Injectable,
   Logger,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -15,6 +16,7 @@ import { OffersService } from '../offers/offers.service';
 import { ReferralService } from '../referral/referral.service';
 import { LoginStreakService } from '../login-streak/login-streak.service';
 import { AgentsService } from '../agents/agents.service';
+import { OtpService } from '../otp/otp.service';
 
 const SALT_ROUNDS = 10;
 
@@ -29,6 +31,7 @@ export class AuthService {
     private readonly referralService: ReferralService,
     private readonly loginStreakService: LoginStreakService,
     private readonly agentsService: AgentsService,
+    private readonly otpService: OtpService,
   ) {}
 
   private async generateOwnReferralCode(): Promise<string> {
@@ -178,6 +181,62 @@ export class AuthService {
     }
 
     const passwordHash = await bcrypt.hash(dto.newPassword, SALT_ROUNDS);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash },
+    });
+    return { success: true };
+  }
+
+  // --- Forgot password (unauthenticated) ---
+  // Same OTP mechanism KYC phone verification already uses (OtpService,
+  // backed by the O-SMS provider) — keyed by the resolved user's id rather
+  // than a JWT-authenticated caller, since by definition nobody's logged in
+  // here. A generic "no account found" error is fine to surface: register()
+  // already reveals phone-registration status the same way.
+
+  async requestPasswordReset(phoneNumber: string): Promise<{ success: true }> {
+    const user = await this.prisma.user.findUnique({ where: { phoneNumber } });
+    if (!user) {
+      throw new NotFoundException('No account found with this phone number.');
+    }
+    await this.otpService.sendOtp(user.id.toString(), phoneNumber);
+    return { success: true };
+  }
+
+  async verifyPasswordResetOtp(
+    phoneNumber: string,
+    code: string,
+  ): Promise<{ verified: true }> {
+    const user = await this.prisma.user.findUnique({ where: { phoneNumber } });
+    if (!user) {
+      throw new NotFoundException('No account found with this phone number.');
+    }
+    const verified = this.otpService.verifyOtp(user.id.toString(), code);
+    if (!verified) {
+      throw new UnauthorizedException('Invalid or expired code.');
+    }
+    return { verified: true };
+  }
+
+  async resetPasswordWithOtp(
+    phoneNumber: string,
+    newPassword: string,
+  ): Promise<{ success: true }> {
+    const user = await this.prisma.user.findUnique({ where: { phoneNumber } });
+    if (!user) {
+      throw new NotFoundException('No account found with this phone number.');
+    }
+    // Re-checked here (not just trusted from the earlier verify step) so a
+    // client can't skip straight to this endpoint — same gating pattern
+    // KycService.submit already uses.
+    if (!this.otpService.wasRecentlyVerified(user.id.toString())) {
+      throw new UnauthorizedException(
+        'Please verify your phone number with an OTP code first.',
+      );
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
     await this.prisma.user.update({
       where: { id: user.id },
       data: { passwordHash },
