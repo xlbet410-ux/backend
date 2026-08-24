@@ -65,4 +65,8 @@ export type CatalogGame = {
   subTags: SubTag[];
   thumbnail: string;
   original: string;
+  // Staff kill switch (GameOverride.isActive) — true unless a CRM admin
+  // has explicitly deactivated this game. Public-facing catalog reads
+  // filter this out; the CRM admin list keeps it visible either way.
+  isActive: boolean;
 };

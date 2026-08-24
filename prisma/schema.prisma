@@ -85,6 +85,11 @@ model User {
   notifications        Notification[]
   referredByAgent      Agent?               @relation("AgentReferrals", fields: [referredByAgentId], references: [id], onDelete: SetNull)
   agentCommissions     AgentCommission[]
+  spinTicketBalance    SpinTicketBalance?
+  spinResults          SpinResult[]
+  pointsBalance        PointsBalance?
+  pointsLedgerEntries  PointsLedgerEntry[]
+  rewardRedemptions    RewardRedemption[]
 
   @@index([referredByAgentId])
   @@map("users")
@@ -145,6 +150,8 @@ model Account {
   reviewedKyc              KycVerification[]
   reviewedCashTransactions CashTransaction[]
   confirmedAgentSettlements AgentSettlement[]
+  spinResultsFulfilled       SpinResult[]
+  rewardRedemptionsFulfilled RewardRedemption[]
 
   @@map("accounts")
 }
@@ -881,9 +888,158 @@ model GameOverride {
   providerName      String?  @map("provider_name") @db.VarChar(100)
   overrideGameUid   String?  @map("override_game_uid") @db.VarChar(200)
   overrideThumbnail String?  @map("override_thumbnail") @db.VarChar(500)
+  // Staff kill switch — false hides the game from every public catalog/play
+  // route while leaving it fully visible (with its overrides intact) in the
+  // CRM admin list. Absent row / no override at all means active (default).
+  isActive          Boolean  @default(true) @map("is_active")
   createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   @@index([overrideGameUid])
   @@map("game_overrides")
+}
+
+// --- Spin & Win ---
+
+model SpinPrize {
+  id   BigInt  @id @default(autoincrement())
+  labelBn String @map("label_bn") @db.VarChar(100)
+  labelEn String? @map("label_en") @db.VarChar(100)
+  imageUrl String? @map("image_url") @db.VarChar(255)
+
+  // 'cash' credits User.balance instantly. 'points' credits PointsBalance
+  // instantly (via RewardsService.grantPoints). 'physical' logs the win for
+  // manual CRM fulfillment, no auto-credit. 'free_spins' grants extra
+  // SpinTicketBalance.ticketCount. Plain String, not a Prisma enum — same
+  // convention as CashTransaction.type/Offer.rewardType elsewhere in this
+  // schema, so a new type never needs a migration.
+  prizeType String @map("prize_type") @db.VarChar(20)
+  cashAmount Decimal? @map("cash_amount") @db.Decimal(14, 2)
+  pointsAmount Int? @map("points_amount")
+  freeSpinsQty Int? @map("free_spins_qty")
+
+  weight Int @default(1)
+  // Scarcity cap. null = unlimited. Sold-out prizes are excluded from the
+  // weighted roll entirely (see SpinWheelService.spin), not re-rolled.
+  maxWins Int? @map("max_wins")
+  currentWinCount Int @default(0) @map("current_win_count")
+
+  wedgeColor String @default("#facc15") @map("wedge_color") @db.VarChar(9)
+  sortOrder Int @default(0) @map("sort_order")
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  results SpinResult[]
+
+  @@index([isActive, sortOrder])
+  @@map("spin_prizes")
+}
+
+model SpinResult {
+  id      BigInt   @id @default(autoincrement())
+  userId  BigInt   @map("user_id")
+  prizeId BigInt   @map("prize_id")
+  wonAt   DateTime @default(now()) @map("won_at") @db.Timestamptz
+
+  // Only meaningful for prizeType='physical' — cash/points/free_spins wins
+  // are auto-fulfilled at write time.
+  fulfilled   Boolean   @default(false)
+  fulfilledAt DateTime? @map("fulfilled_at") @db.Timestamptz
+  fulfilledBy BigInt?   @map("fulfilled_by")
+  fulfillNote String?   @map("fulfill_note") @db.VarChar(500)
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  prize     SpinPrize @relation(fields: [prizeId], references: [id], onDelete: Restrict)
+  fulfiller Account?  @relation(fields: [fulfilledBy], references: [id], onDelete: SetNull)
+
+  @@index([wonAt])
+  @@index([userId, wonAt])
+  @@index([fulfilled, wonAt])
+  @@map("spin_results")
+}
+
+model SpinTicketBalance {
+  userId           BigInt    @id @map("user_id")
+  ticketCount      Int       @default(0) @map("ticket_count")
+  lastFreeTicketAt DateTime? @map("last_free_ticket_at") @db.Timestamptz
+  updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("spin_ticket_balances")
+}
+
+// --- Points + Rewards Catalog ---
+
+model PointsBalance {
+  userId    BigInt   @id @map("user_id")
+  points    Int      @default(0)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("points_balances")
+}
+
+// Audit trail for every points change — required since this is a real
+// ledger, not just a counter. 'reason' stays a plain String (same
+// convention as elsewhere) so a new earn source never needs a migration.
+model PointsLedgerEntry {
+  id        BigInt   @id @default(autoincrement())
+  userId    BigInt   @map("user_id")
+  delta     Int // positive = earned, negative = spent
+  reason    String   @db.VarChar(30) // 'spin_win' | 'catalog_redemption'
+  refId     BigInt?  @map("ref_id") // SpinResult.id or RewardRedemption.id
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("points_ledger_entries")
+}
+
+model RewardCatalogItem {
+  id            BigInt   @id @default(autoincrement())
+  nameBn        String   @map("name_bn") @db.VarChar(100)
+  nameEn        String?  @map("name_en") @db.VarChar(100)
+  imageUrl      String?  @map("image_url") @db.VarChar(255)
+  descriptionBn String?  @map("description_bn")
+  descriptionEn String?  @map("description_en")
+  pointsCost    Int      @map("points_cost")
+  // null = unlimited stock.
+  stock         Int?     @map("stock")
+  redeemedCount Int      @default(0) @map("redeemed_count")
+  sortOrder     Int      @default(0) @map("sort_order")
+  isActive      Boolean  @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  redemptions RewardRedemption[]
+
+  @@index([isActive, sortOrder])
+  @@map("reward_catalog_items")
+}
+
+model RewardRedemption {
+  id          BigInt   @id @default(autoincrement())
+  userId      BigInt   @map("user_id")
+  itemId      BigInt   @map("item_id")
+  pointsSpent Int      @map("points_spent")
+  redeemedAt  DateTime @default(now()) @map("redeemed_at") @db.Timestamptz
+
+  fulfilled   Boolean   @default(false)
+  fulfilledAt DateTime? @map("fulfilled_at") @db.Timestamptz
+  fulfilledBy BigInt?   @map("fulfilled_by")
+  fulfillNote String?   @map("fulfill_note") @db.VarChar(500)
+
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  item      RewardCatalogItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  fulfiller Account?          @relation(fields: [fulfilledBy], references: [id], onDelete: SetNull)
+
+  @@index([fulfilled, redeemedAt])
+  @@index([userId, redeemedAt])
+  @@map("reward_redemptions")
 }

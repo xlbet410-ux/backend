@@ -153,6 +153,10 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       this.prisma.gameOverride.findUnique({ where: { gameUid } }),
     ]);
 
+    if (override?.isActive === false) {
+      throw new BadRequestException('This game is currently unavailable.');
+    }
+
     const amount = Number(user.balance);
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new BadRequestException('Please deposit funds before playing.');
@@ -251,6 +255,20 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       void this.rebuildCatalog();
     }
     return this.catalogCache.games;
+  }
+
+  /**
+   * Every public-facing read (catalog browsing, search, provider lists,
+   * launch) goes through this instead of ensureCatalog() directly — it
+   * strips games a CRM admin has deactivated (see GameOverride.isActive).
+   * Admin-facing reads (adminListGames) and historical lookups (game
+   * history labels, bonus turnover categorization) intentionally keep
+   * using ensureCatalog() directly so a deactivated game still resolves
+   * correctly for bets that already happened.
+   */
+  private async ensurePublicCatalog(): Promise<CatalogGame[]> {
+    const all = await this.ensureCatalog();
+    return all.filter((g) => g.isActive);
   }
 
   /** Single-flight: concurrent callers await the same in-flight build. */
@@ -416,6 +434,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
               // Staff-set replacement for a broken image — see GameOverride.
               thumbnail: override?.overrideThumbnail || g.thumbnail,
               original: override?.overrideThumbnail || g.original,
+              isActive: override?.isActive ?? true,
             });
           }
         }
@@ -434,7 +453,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getCatalogCounts(): Promise<Record<GameCategory, number>> {
-    const games = await this.ensureCatalog();
+    const games = await this.ensurePublicCatalog();
     const counts = Object.fromEntries(
       GAME_CATEGORIES.map((c) => [c, 0]),
     ) as Record<GameCategory, number>;
@@ -449,7 +468,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   async getSubTagCounts(
     category: GameCategory,
   ): Promise<Record<SubTag, number>> {
-    const games = await this.ensureCatalog();
+    const games = await this.ensurePublicCatalog();
     const inCategory =
       category === 'featured'
         ? games.filter((g) => g.featured)
@@ -532,7 +551,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     sort?: 'name_asc' | 'name_desc' | 'featured',
     userId?: bigint,
   ): Promise<{ games: CatalogGame[]; total: number }> {
-    const games = await this.ensureCatalog();
+    const games = await this.ensurePublicCatalog();
     let all =
       category === 'featured'
         ? games.filter((g) => g.featured)
@@ -622,7 +641,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   async getCategoryProviders(
     category: GameCategory,
   ): Promise<{ code: string; name: string; count: number }[]> {
-    const games = await this.ensureCatalog();
+    const games = await this.ensurePublicCatalog();
     const inCategory =
       category === 'featured'
         ? games.filter((g) => g.featured)
@@ -637,7 +656,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   async getAllProviders(): Promise<
     { code: string; name: string; count: number }[]
   > {
-    const games = await this.ensureCatalog();
+    const games = await this.ensurePublicCatalog();
     return this.groupByProvider(games);
   }
 
@@ -674,7 +693,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     pageSize: number,
     sort: 'name_asc' | 'name_desc' | 'featured' = 'name_asc',
   ): Promise<{ games: CatalogGame[]; total: number; providerName: string }> {
-    const games = await this.ensureCatalog();
+    const games = await this.ensurePublicCatalog();
     const code = providerCode.trim().toUpperCase();
     // Same defensive gameUid dedupe as groupByProvider.
     const seen = new Set<string>();
@@ -709,7 +728,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   async searchCatalog(
     q: string,
   ): Promise<{ games: CatalogGame[]; total: number }> {
-    const games = await this.ensureCatalog();
+    const games = await this.ensurePublicCatalog();
     const needle = q.trim().toLowerCase();
     const matches = games.filter((g) => g.name.toLowerCase().includes(needle));
     return {
@@ -893,7 +912,15 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   // catalog consumer in this file works (10-minute cache, refreshed from
   // Oracle, never persisted).
 
-  async adminListGames(params: { q?: string; page?: number; pageSize?: number }) {
+  async adminListGames(params: {
+    q?: string;
+    page?: number;
+    pageSize?: number;
+    status?: 'active' | 'inactive';
+  }) {
+    // Deliberately the full catalog, not ensurePublicCatalog() — staff need
+    // to see (and re-activate) games they've deactivated, not just the ones
+    // currently live on the site.
     const catalog = await this.ensureCatalog();
 
     // Catalog can list the same gameUid more than once (a title forced into
@@ -907,12 +934,19 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       deduped.push(g);
     }
 
+    // Global counts (unaffected by search/status filters below) — powers
+    // the "Active / Deactivated" tabs in the CRM.
+    const activeCount = deduped.filter((g) => g.isActive).length;
+    const inactiveCount = deduped.length - activeCount;
+
     const q = params.q?.trim().toLowerCase();
-    const filtered = q
+    let filtered = q
       ? deduped.filter(
           (g) => g.name.toLowerCase().includes(q) || g.gameUid.toLowerCase().includes(q),
         )
       : deduped;
+    if (params.status === 'active') filtered = filtered.filter((g) => g.isActive);
+    else if (params.status === 'inactive') filtered = filtered.filter((g) => !g.isActive);
 
     const page = params.page ?? 1;
     const pageSize = Math.min(params.pageSize ?? 50, 200);
@@ -926,6 +960,8 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
 
     return {
       total,
+      activeCount,
+      inactiveCount,
       games: pageRows.map((g) => {
         const override = overrideByUid.get(g.gameUid);
         return {
@@ -936,6 +972,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
           thumbnail: g.thumbnail,
           overrideGameUid: override?.overrideGameUid ?? null,
           overrideThumbnail: override?.overrideThumbnail ?? null,
+          isActive: g.isActive,
         };
       }),
     };
@@ -949,9 +986,19 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     const overrideThumbnail = dto.overrideThumbnail?.trim() || null;
 
     if (!overrideGameUid && !overrideThumbnail) {
-      // Nothing left to override — remove the row instead of leaving an
-      // empty one behind.
-      await this.prisma.gameOverride.deleteMany({ where: { gameUid } });
+      // A deactivated game (isActive: false) still needs its row kept —
+      // only drop the row when there's truly nothing left on it to store.
+      const existing = await this.prisma.gameOverride.findUnique({ where: { gameUid } });
+      if (existing && existing.isActive === false) {
+        await this.prisma.gameOverride.update({
+          where: { gameUid },
+          data: { overrideGameUid: null, overrideThumbnail: null },
+        });
+      } else {
+        // Nothing left to override — remove the row instead of leaving an
+        // empty one behind.
+        await this.prisma.gameOverride.deleteMany({ where: { gameUid } });
+      }
       // Same immediate-rebuild reasoning as the upsert branch below —
       // otherwise the stale override (wrong image/uid) keeps being served
       // from the in-memory catalog for up to 10 more minutes after staff
@@ -988,5 +1035,46 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       overrideGameUid: saved.overrideGameUid,
       overrideThumbnail: saved.overrideThumbnail,
     };
+  }
+
+  /**
+   * The active/deactivate kill switch — independent of adminSetGameOverride
+   * so toggling status never touches (or risks clobbering) an existing
+   * image/uid override, and vice versa.
+   */
+  async adminSetGameStatus(
+    gameUid: string,
+    isActive: boolean,
+    meta: { name?: string; providerName?: string },
+  ) {
+    const existing = await this.prisma.gameOverride.findUnique({ where: { gameUid } });
+
+    if (isActive) {
+      if (!existing) return { gameUid, isActive: true };
+      if (!existing.overrideGameUid && !existing.overrideThumbnail) {
+        // Reactivating with nothing else overridden on the row — remove it
+        // instead of leaving a bare one behind (isActive already defaults
+        // to true with no row at all).
+        await this.prisma.gameOverride.deleteMany({ where: { gameUid } });
+        void this.rebuildCatalog();
+        return { gameUid, isActive: true };
+      }
+    }
+
+    const saved = await this.prisma.gameOverride.upsert({
+      where: { gameUid },
+      create: { gameUid, name: meta.name, providerName: meta.providerName, isActive },
+      update: {
+        isActive,
+        ...(meta.name ? { name: meta.name } : {}),
+        ...(meta.providerName ? { providerName: meta.providerName } : {}),
+      },
+    });
+
+    // Same reasoning as adminSetGameOverride — take effect immediately
+    // instead of waiting up to 10 minutes for the next scheduled refresh.
+    void this.rebuildCatalog();
+
+    return { gameUid, isActive: saved.isActive };
   }
 }

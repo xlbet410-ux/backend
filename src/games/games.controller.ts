@@ -28,6 +28,7 @@ import { GetCategoryProvidersDto } from './dto/get-category-providers.dto';
 import { GetProviderCatalogDto } from './dto/get-provider-catalog.dto';
 import { AdminListGamesQueryDto } from './dto/admin-list-games.dto';
 import { SetGameOverrideDto } from './dto/set-game-override.dto';
+import { SetGameStatusDto } from './dto/set-game-status.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { ApiKeyGuard } from '../common/guards/api-key.guard';
@@ -225,5 +226,17 @@ export class GamesController {
     @Body() dto: SetGameOverrideDto,
   ) {
     return this.gamesService.adminSetGameOverride(gameUid, dto);
+  }
+
+  @UseGuards(ApiKeyGuard)
+  @Patch('games/admin/:gameUid/status')
+  adminSetGameStatus(
+    @Param('gameUid') gameUid: string,
+    @Body() dto: SetGameStatusDto,
+  ) {
+    return this.gamesService.adminSetGameStatus(gameUid, dto.isActive, {
+      name: dto.name,
+      providerName: dto.providerName,
+    });
   }
 }
