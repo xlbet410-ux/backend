@@ -950,7 +950,10 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     // Deliberately the full catalog, not ensurePublicCatalog() — staff need
     // to see (and re-activate) games they've deactivated, not just the ones
     // currently live on the site.
-    const catalog = await this.ensureCatalog();
+    const [catalog, deactivated] = await Promise.all([
+      this.ensureCatalog(),
+      this.getDeactivatedGameUids(),
+    ]);
 
     // Catalog can list the same gameUid more than once (a title forced into
     // two categories — see buildCatalog's pinned-category comment); the
@@ -963,9 +966,17 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       deduped.push(g);
     }
 
+    // Same reasoning as ensurePublicCatalog() — a game's own `isActive` is
+    // only as fresh as the last full catalog rebuild, so the CRM table
+    // would otherwise keep showing the pre-toggle state for as long as that
+    // rebuild takes. Checking the live deactivated-uid set instead means
+    // the table (and its Active/Deactivated counts) reflects a toggle on
+    // the very next load.
+    const isActive = (g: CatalogGame) => !deactivated.has(g.gameUid);
+
     // Global counts (unaffected by search/status filters below) — powers
     // the "Active / Deactivated" tabs in the CRM.
-    const activeCount = deduped.filter((g) => g.isActive).length;
+    const activeCount = deduped.filter(isActive).length;
     const inactiveCount = deduped.length - activeCount;
 
     const q = params.q?.trim().toLowerCase();
@@ -974,8 +985,8 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
           (g) => g.name.toLowerCase().includes(q) || g.gameUid.toLowerCase().includes(q),
         )
       : deduped;
-    if (params.status === 'active') filtered = filtered.filter((g) => g.isActive);
-    else if (params.status === 'inactive') filtered = filtered.filter((g) => !g.isActive);
+    if (params.status === 'active') filtered = filtered.filter(isActive);
+    else if (params.status === 'inactive') filtered = filtered.filter((g) => !isActive(g));
 
     const page = params.page ?? 1;
     const pageSize = Math.min(params.pageSize ?? 50, 200);
@@ -1001,7 +1012,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
           thumbnail: g.thumbnail,
           overrideGameUid: override?.overrideGameUid ?? null,
           overrideThumbnail: override?.overrideThumbnail ?? null,
-          isActive: g.isActive,
+          isActive: isActive(g),
         };
       }),
     };
