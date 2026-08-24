@@ -265,10 +265,39 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
    * history labels, bonus turnover categorization) intentionally keep
    * using ensureCatalog() directly so a deactivated game still resolves
    * correctly for bets that already happened.
+   *
+   * Deliberately checked against getDeactivatedGameUids() (a cheap, short-TTL
+   * DB read) rather than each game's own baked-in `isActive` — that field is
+   * only as fresh as the last full catalog rebuild, which re-sweeps every
+   * Oracle provider live and can take a long time. Gating on the DB instead
+   * means a CRM deactivate/reactivate takes effect in seconds, not whenever
+   * the next full rebuild happens to finish.
    */
   private async ensurePublicCatalog(): Promise<CatalogGame[]> {
-    const all = await this.ensureCatalog();
-    return all.filter((g) => g.isActive);
+    const [all, deactivated] = await Promise.all([
+      this.ensureCatalog(),
+      this.getDeactivatedGameUids(),
+    ]);
+    return all.filter((g) => !deactivated.has(g.gameUid));
+  }
+
+  private deactivatedCache: { uids: Set<string>; fetchedAt: number } | null = null;
+  private static readonly DEACTIVATED_TTL_MS = 5_000;
+
+  private async getDeactivatedGameUids(): Promise<Set<string>> {
+    if (
+      this.deactivatedCache &&
+      Date.now() - this.deactivatedCache.fetchedAt < GamesService.DEACTIVATED_TTL_MS
+    ) {
+      return this.deactivatedCache.uids;
+    }
+    const rows = await this.prisma.gameOverride.findMany({
+      where: { isActive: false },
+      select: { gameUid: true },
+    });
+    const uids = new Set(rows.map((r) => r.gameUid));
+    this.deactivatedCache = { uids, fetchedAt: Date.now() };
+    return uids;
   }
 
   /** Single-flight: concurrent callers await the same in-flight build. */
@@ -1056,6 +1085,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
         // instead of leaving a bare one behind (isActive already defaults
         // to true with no row at all).
         await this.prisma.gameOverride.deleteMany({ where: { gameUid } });
+        this.deactivatedCache = null;
         void this.rebuildCatalog();
         return { gameUid, isActive: true };
       }
@@ -1071,8 +1101,11 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       },
     });
 
-    // Same reasoning as adminSetGameOverride — take effect immediately
-    // instead of waiting up to 10 minutes for the next scheduled refresh.
+    // Drop the short-TTL deactivated-uid cache so ensurePublicCatalog() picks
+    // this up on its very next read instead of up to DEACTIVATED_TTL_MS
+    // later. rebuildCatalog() is still triggered too, same as
+    // adminSetGameOverride, for the game's other catalog fields.
+    this.deactivatedCache = null;
     void this.rebuildCatalog();
 
     return { gameUid, isActive: saved.isActive };
