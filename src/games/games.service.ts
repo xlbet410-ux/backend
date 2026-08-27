@@ -536,6 +536,19 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     const active = Array.isArray(providers)
       ? providers.filter((p) => p.status === 1)
       : [];
+    // 9Wicket is a "transfer mode" integration with its own dedicated
+    // /ninewicket launch + /ninewicket/getbalance endpoints — per its own
+    // API doc it has no entry in /manager/providerlist at all, unlike every
+    // aggregated provider this loop normally relies on that list for. It
+    // must be injected manually here or it can never reach the loop below,
+    // no matter what gets enabled on Oracle's side.
+    if (
+      !active.some(
+        (p) => p.code.trim().toUpperCase() === NINE_WICKET_PROVIDER_CODE,
+      )
+    ) {
+      active.push({ code: NINE_WICKET_PROVIDER_CODE, name: '9Wicket', status: 1 });
+    }
 
     const overrideByUid = new Map(overrides.map((o) => [o.gameUid, o]));
     const nextReverseMap = new Map<string, string>();
