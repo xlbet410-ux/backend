@@ -24,6 +24,10 @@ model User {
   agreedTerms     Boolean  @default(false) @map("agreed_terms")
   balance         Decimal  @default(0) @db.Decimal(14, 2)
   gameAccount     String?  @unique @map("game_account") @db.VarChar(10)
+  // Separate launch username for the 9Wicket provider — its API requires
+  // exactly 6 characters, incompatible with the 10-char gameAccount above.
+  // See GamesService.ensureNineWicketAccount / launchNineWicket.
+  nineWicketAccount String? @unique @map("nine_wicket_account") @db.VarChar(6)
   // Player-facing display ID (e.g. "2XL-361773"), assigned once at
   // registration — shown on the bet site profile and searchable in the CRM.
   memberId        String   @unique @map("member_id") @db.VarChar(20)

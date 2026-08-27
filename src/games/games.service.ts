@@ -49,6 +49,22 @@ const PROVIDER_FETCH_DELAY_MS = 300;
 const FEATURED_LOOKBACK_DAYS = 30;
 const FEATURED_LIMIT = 30;
 
+// 9Wicket (cricket sportsbook) — unlike every other provider, Oracle's own
+// per-title catalog endpoint (getProviderGames) returns zero games for this
+// provider code; there's just one dedicated launch endpoint instead of a
+// list of titles. buildCatalog() synthesizes a single card for it under
+// this fixed gameUid so it shows up in Live Sports (and the CRM's games
+// list) exactly like every other game, and launchGame() routes launches for
+// this exact uid to launchNineWicket() instead of the generic getgameurl call.
+const NINE_WICKET_PROVIDER_CODE = '9W';
+const NINE_WICKET_GAME_UID = '9wicket-lobby';
+const NINE_WICKET_ACCOUNT_LENGTH = 6;
+// Oracle requires this launch "username" to be exactly 6 characters with no
+// special characters — incompatible with the 10-lowercase-letter
+// gameAccount used for every other provider, hence the separate column.
+const NINE_WICKET_ACCOUNT_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
+const NINE_WICKET_ACCOUNT_PATTERN = /^[a-z0-9]{6}$/;
+
 type CallbackPayload = {
   game_uid: string;
   game_round: string;
@@ -145,8 +161,47 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private randomNineWicketAccount(): string {
+    const bytes = randomBytes(NINE_WICKET_ACCOUNT_LENGTH);
+    let out = '';
+    for (let i = 0; i < NINE_WICKET_ACCOUNT_LENGTH; i++) {
+      out += NINE_WICKET_ACCOUNT_CHARS[bytes[i] % NINE_WICKET_ACCOUNT_CHARS.length];
+    }
+    return out;
+  }
+
+  private async ensureNineWicketAccount(userId: bigint): Promise<string> {
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+    });
+    if (
+      user.nineWicketAccount &&
+      NINE_WICKET_ACCOUNT_PATTERN.test(user.nineWicketAccount)
+    )
+      return user.nineWicketAccount;
+
+    for (;;) {
+      const candidate = this.randomNineWicketAccount();
+      const existing = await this.prisma.user.findUnique({
+        where: { nineWicketAccount: candidate },
+      });
+      if (existing) continue;
+
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { nineWicketAccount: candidate },
+      });
+      return candidate;
+    }
+  }
+
   async launchGame(userId: string, gameUid: string) {
     const id = BigInt(userId);
+
+    if (gameUid === NINE_WICKET_GAME_UID) {
+      return this.launchNineWicket(id);
+    }
+
     const [user, gameAccount, override] = await Promise.all([
       this.prisma.user.findUniqueOrThrow({ where: { id } }),
       this.ensureGameAccount(id),
@@ -215,6 +270,77 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       );
       throw new BadRequestException({
         message: data?.message ?? "Couldn't launch this game right now.",
+        ...(isDev ? { oracleResponse: data } : {}),
+      });
+    }
+    return { gameUrl };
+  }
+
+  // 9Wicket has its own dedicated launch endpoint and response shape — see
+  // the constant comment above launchGame. Bet settlement itself still goes
+  // through the same shared handleCallback() as every other provider.
+  private async launchNineWicket(id: bigint) {
+    const [user, nineWicketAccount, override] = await Promise.all([
+      this.prisma.user.findUniqueOrThrow({ where: { id } }),
+      this.ensureNineWicketAccount(id),
+      this.prisma.gameOverride.findUnique({
+        where: { gameUid: NINE_WICKET_GAME_UID },
+      }),
+    ]);
+
+    if (override?.isActive === false) {
+      throw new BadRequestException('This game is currently unavailable.');
+    }
+
+    const amount = Number(user.balance);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('Please deposit funds before playing.');
+    }
+
+    const payload = { username: nineWicketAccount, amount };
+    const isDev = process.env.NODE_ENV !== 'production';
+
+    type NineWicketLaunchResponse = {
+      transfer_amount?: number;
+      transfer_status?: number;
+      game_url?: string;
+    };
+    let res: Response;
+    let data: NineWicketLaunchResponse | null = null;
+    try {
+      res = await fetch(`${this.baseUrl}/ninewicket`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-oracle-key': this.apiKey,
+        },
+        body: JSON.stringify(payload),
+      });
+      data = (await res
+        .json()
+        .catch(() => null)) as NineWicketLaunchResponse | null;
+    } catch (err) {
+      const e = err as Error;
+      this.logger.error(
+        `ninewicket request errored for user ${id}. Request: ${JSON.stringify(payload)} ` +
+          `Error: ${e.message}\n${e.stack}`,
+      );
+      throw new BadRequestException({
+        message: "Couldn't launch this game right now.",
+        ...(isDev ? { oracleResponse: { error: e.message } } : {}),
+      });
+    }
+
+    const isSuccess = data?.transfer_status === 1;
+    const gameUrl = data?.game_url;
+
+    if (!res.ok || !isSuccess || !gameUrl) {
+      this.logger.error(
+        `ninewicket failed for user ${id}. Request: ${JSON.stringify(payload)} ` +
+          `Response (${res.status}): ${JSON.stringify(data)}`,
+      );
+      throw new BadRequestException({
+        message: "Couldn't launch this game right now.",
         ...(isDev ? { oracleResponse: data } : {}),
       });
     }
@@ -433,7 +559,25 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
         };
         const sportsEsportsOverride =
           SPORTS_ESPORTS_PROVIDER_OVERRIDE[provider.code.trim().toUpperCase()];
-        for (const g of data.games ?? []) {
+        // 9Wicket publishes no per-title catalog at all (getProviderGames
+        // always returns an empty games list for it) — synthesize the one
+        // card it needs so it flows through the exact same pipeline
+        // (category, overrides, isActive, thumbnail) as every real game.
+        const games =
+          provider.code.trim().toUpperCase() === NINE_WICKET_PROVIDER_CODE &&
+          !(data.games ?? []).length
+            ? [
+                {
+                  name: '9Wicket',
+                  game_uid: NINE_WICKET_GAME_UID,
+                  category: 'Sports',
+                  thumbnail: '',
+                  original: '',
+                  status: 1,
+                },
+              ]
+            : (data.games ?? []);
+        for (const g of games) {
           if (g.status !== 1) continue;
           // Sportsbook aggregators are split by provider (see the comment on
           // SPORTS_ESPORTS_PROVIDER_OVERRIDE), overriding even the raw
@@ -805,8 +949,18 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
 
     try {
       const result = await this.prisma.$transaction(async (tx) => {
-        const user = await tx.user.findUnique({
-          where: { gameAccount: member_account },
+        // member_account matches gameAccount for every provider except
+        // 9Wicket, which launches with the separate 6-char
+        // nineWicketAccount instead (see launchNineWicket) — falls back to
+        // it here so 9Wicket callbacks settle through the exact same path
+        // as everyone else.
+        const user = await tx.user.findFirst({
+          where: {
+            OR: [
+              { gameAccount: member_account },
+              { nineWicketAccount: member_account },
+            ],
+          },
         });
         if (!user) {
           throw new NotFoundException(

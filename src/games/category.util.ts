@@ -105,6 +105,7 @@ export const SPORTS_ESPORTS_PROVIDER_OVERRIDE: Record<
   BTI: 'sports',
   SBO: 'sports',
   BETBY: 'sports',
+  '9W': 'sports', // 9Wicket — cricket betting, synthesized single card (see games.service.ts buildCatalog)
   LUCKSPORT: 'esports',
   CMD: 'esports',
   DP: 'esports',
