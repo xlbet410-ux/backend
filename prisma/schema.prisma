@@ -1,0 +1,1049 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id              BigInt   @id @default(autoincrement())
+  fullName        String   @map("full_name") @db.VarChar(100)
+  phoneNumber     String   @unique @map("phone_number") @db.VarChar(20)
+  passwordHash    String   @map("password_hash") @db.VarChar(255)
+  referralCode    String?  @map("referral_code") @db.VarChar(20)
+  ownReferralCode String?  @unique @map("own_referral_code") @db.VarChar(20)
+  isAdult         Boolean  @default(false) @map("is_adult")
+  agreedTerms     Boolean  @default(false) @map("agreed_terms")
+  balance         Decimal  @default(0) @db.Decimal(14, 2)
+  gameAccount     String?  @unique @map("game_account") @db.VarChar(10)
+  // Separate launch username for the 9Wicket provider — its API requires
+  // exactly 6 characters, incompatible with the 10-char gameAccount above.
+  // See GamesService.ensureNineWicketAccount / launchNineWicket.
+  nineWicketAccount String? @unique @map("nine_wicket_account") @db.VarChar(6)
+  // Player-facing display ID (e.g. "2XL-361773"), assigned once at
+  // registration — shown on the bet site profile and searchable in the CRM.
+  memberId        String   @unique @map("member_id") @db.VarChar(20)
+  // Admin-controlled kill switch, independent of KYC status — see
+  // CashTransaction for how this and KYC together gate withdrawals.
+  isActive        Boolean  @default(true) @map("is_active")
+  // Auto-calculated from real deposits/bets by VipService — see
+  // vip_tiers. agentTier stays plain/admin-only; no referral-tier system
+  // exists yet.
+  vipLevel        Int       @default(0) @map("vip_level")
+  agentTier       Int       @default(0) @map("agent_tier")
+  // Running totals VipService increments on every approved deposit / settled
+  // bet — an O(1) check against vip_tiers on each event beats re-aggregating
+  // CashTransaction/GameTransaction from scratch every time.
+  lifetimeDepositAmount Decimal   @default(0) @map("lifetime_deposit_amount") @db.Decimal(14, 2)
+  lifetimeBetAmount     Decimal   @default(0) @map("lifetime_bet_amount") @db.Decimal(14, 2)
+  vipUpgradedAt         DateTime? @map("vip_upgraded_at") @db.Timestamptz
+  // Running total of completed cash_out amounts — audit/stats counter,
+  // parallel to lifetimeDepositAmount. Withdrawal itself is gated purely by
+  // BonusService.canWithdraw (any active BonusWallet, including a deposit's
+  // own turnover requirement, blocks withdrawal entirely until cleared).
+  lifetimeWithdrawnAmount Decimal @default(0) @map("lifetime_withdrawn_amount") @db.Decimal(14, 2)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  // Admin kill switch for referral commission/signup-bonus eligibility,
+  // separate from the unrelated Agent entity (payment agents) — same
+  // simple-boolean pattern as isActive above.
+  referralEnabled Boolean @default(true) @map("referral_enabled")
+  lifetimeCommissionEarned Decimal @default(0) @map("lifetime_commission_earned") @db.Decimal(14, 2)
+
+  // Set once at registration if the player signed up via an agent's own
+  // referral link (?agent=CODE), independent of the player-to-player
+  // Referral system above. Drives deposit/withdraw payment-account routing
+  // and, for type='commission' agents, automatic loss-based commission —
+  // see PaymentAccountsService and AgentsService.recordLossCommission.
+  referredByAgentId BigInt? @map("referred_by_agent_id")
+
+  // Daily-login streak — plain counters, no separate "streak" table needed
+  // for the live value; LoginStreakLog below is history/audit only.
+  loginStreak        Int       @default(0) @map("login_streak")
+  longestLoginStreak Int       @default(0) @map("longest_login_streak")
+  lastLoginDate      DateTime? @map("last_login_date") @db.Date
+  totalLogins        Int       @default(0) @map("total_logins")
+
+  conversations    Conversation[]
+  kycVerification  KycVerification?
+  gameTransactions GameTransaction[]
+  cashTransactions CashTransaction[]
+  offerClaims      OfferClaim[]
+  bonusWallets     BonusWallet[]
+  vipUpgradeLogs   VipUpgradeLog[]
+  referralsAsReferrer  Referral[]           @relation("Referrer")
+  referralAsReferred   Referral?            @relation("Referred")
+  commissionsEarned    ReferralCommission[] @relation("CommissionReferrer")
+  commissionsGenerated ReferralCommission[] @relation("CommissionReferred")
+  cashbackGrants       CashbackGrant[]
+  loginStreakLogs      LoginStreakLog[]
+  notifications        Notification[]
+  referredByAgent      Agent?               @relation("AgentReferrals", fields: [referredByAgentId], references: [id], onDelete: SetNull)
+  agentCommissions     AgentCommission[]
+  spinTicketBalance    SpinTicketBalance?
+  spinResults          SpinResult[]
+  pointsBalance        PointsBalance?
+  pointsLedgerEntries  PointsLedgerEntry[]
+  rewardRedemptions    RewardRedemption[]
+
+  @@index([referredByAgentId])
+  @@map("users")
+}
+
+model Page {
+  path    String @id @db.VarChar(50)
+  label   String @db.VarChar(50)
+  section String @db.VarChar(30)
+
+  roles RolePage[]
+
+  @@map("pages")
+}
+
+model Role {
+  id         BigInt   @id @default(autoincrement())
+  name       String   @unique @db.VarChar(50)
+  canApprove Boolean  @default(false) @map("can_approve")
+  isBuiltIn  Boolean  @default(false) @map("is_built_in")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  pages    RolePage[]
+  accounts Account[]
+
+  @@map("roles")
+}
+
+model RolePage {
+  roleId   BigInt @map("role_id")
+  pagePath String @map("page_path") @db.VarChar(50)
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  page Page @relation(fields: [pagePath], references: [path], onDelete: Cascade)
+
+  @@id([roleId, pagePath])
+  @@map("role_pages")
+}
+
+model Account {
+  id           BigInt   @id @default(autoincrement())
+  username     String   @unique @db.VarChar(50)
+  // Nullable — an admin can create an account with no password set yet and
+  // add one later; such an account just can't log in until then (mirrors
+  // Agent.passwordHash).
+  passwordHash String?  @map("password_hash") @db.VarChar(255)
+  roleId       BigInt   @map("role_id")
+  percentage   Decimal? @db.Decimal(5, 2)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  role Role @relation(fields: [roleId], references: [id])
+
+  assignedConversations    Conversation[]
+  sentMessages             Message[]
+  reviewedKyc              KycVerification[]
+  reviewedCashTransactions CashTransaction[]
+  confirmedAgentSettlements AgentSettlement[]
+  spinResultsFulfilled       SpinResult[]
+  rewardRedemptionsFulfilled RewardRedemption[]
+
+  @@map("accounts")
+}
+
+model Conversation {
+  id            BigInt   @id @default(autoincrement())
+  userId        BigInt   @map("user_id")
+  assignedAgent BigInt?  @map("assigned_agent")
+  status        String   @default("open") @db.VarChar(20)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agent    Account?  @relation(fields: [assignedAgent], references: [id], onDelete: SetNull)
+  messages Message[]
+
+  @@map("conversations")
+}
+
+model Message {
+  id              BigInt   @id @default(autoincrement())
+  conversationId  BigInt   @map("conversation_id")
+  senderType      String   @map("sender_type") @db.VarChar(10)
+  senderAccountId BigInt?  @map("sender_account_id")
+  body            String
+  isRead          Boolean  @default(false) @map("is_read")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  conversation  Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderAccount Account?     @relation(fields: [senderAccountId], references: [id])
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+model KycVerification {
+  id               BigInt    @id @default(autoincrement())
+  userId           BigInt    @unique @map("user_id")
+  documentType     String    @map("document_type") @db.VarChar(20)
+  documentFrontUrl String    @map("document_front_url") @db.VarChar(500)
+  documentBackUrl  String    @map("document_back_url") @db.VarChar(500)
+  selfieUrl        String    @map("selfie_url") @db.VarChar(500)
+  status           String    @default("pending") @db.VarChar(20)
+  rejectReason     String?   @map("reject_reason")
+  reviewedBy       BigInt?   @map("reviewed_by")
+  reviewedAt       DateTime? @map("reviewed_at") @db.Timestamptz
+  submittedAt      DateTime  @default(now()) @map("submitted_at") @db.Timestamptz
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewer Account? @relation(fields: [reviewedBy], references: [id], onDelete: SetNull)
+
+  @@map("kyc_verifications")
+}
+
+model CashTransaction {
+  id         BigInt    @id @default(autoincrement())
+  userId     BigInt    @map("user_id")
+  // 'cash_in' (deposit) or 'cash_out' (withdrawal)
+  type       String    @db.VarChar(10)
+  method     String    @db.VarChar(20)
+  amount     Decimal   @db.Decimal(14, 2)
+  // Transaction ID the player supplied for a cash-in, or the destination
+  // account number they gave for a cash-out.
+  reference  String?   @db.VarChar(150)
+  // Which agent payment account this request is tied to — for a cash-in,
+  // the exact account the player was shown and told to pay; for a
+  // cash-out, the account auto-assigned (by method) to fulfil it.
+  paymentAccountId BigInt? @map("payment_account_id")
+  status     String    @default("pending") @db.VarChar(20)
+  reviewedBy BigInt?   @map("reviewed_by")
+  reviewedAt DateTime? @map("reviewed_at") @db.Timestamptz
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime  @default(now()) @map("updated_at") @db.Timestamptz
+
+  // Staff-approved requests set reviewedBy; agent-approved requests (an
+  // agent resolving a request tied to their own payment account) set
+  // approvedByAgentId instead — never both.
+  approvedByAgentId BigInt? @map("approved_by_agent_id")
+
+  // The deposit-offer the player picked on the deposit page, if any — only
+  // actually applied once this cash-in is approved (see
+  // TransactionsService.approve), and only if the player still qualifies
+  // at that point (budget/KYC/limits are re-checked, not trusted from here).
+  offerId BigInt? @map("offer_id")
+  // True only when the player explicitly picked "do not participate in
+  // any promotions" on the deposit step — distinct from offerId simply
+  // being unset (e.g. no offers were ever shown to choose from). Gates
+  // fireDepositTriggers from auto-matching this deposit to some other
+  // eligible offer behind the player's back.
+  noOffer Boolean @default(false) @map("no_offer")
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewer       Account?        @relation(fields: [reviewedBy], references: [id], onDelete: SetNull)
+  paymentAccount PaymentAccount? @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
+  approvingAgent Agent?          @relation(fields: [approvedByAgentId], references: [id], onDelete: SetNull)
+  offer          Offer?          @relation(fields: [offerId], references: [id], onDelete: SetNull)
+
+  // findMine (player transaction history: userId + createdAt sort).
+  @@index([userId, createdAt])
+  // findCashIn/findCashOut (admin approval queues: type + createdAt sort).
+  @@index([type, createdAt])
+  // fireDepositTriggers / getApplicableDepositOffers nth_deposit check
+  // (exact userId+type+status match, no sort needed).
+  @@index([userId, type, status])
+  @@map("cash_transactions")
+}
+
+model SliderImage {
+  id           BigInt   @id @default(autoincrement())
+  imageUrl     String   @map("image_url") @db.VarChar(500)
+  originalName String   @map("original_name") @db.VarChar(255)
+  sortOrder    Int      @default(0) @map("sort_order")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  @@map("slider_images")
+}
+
+model PromoImage {
+  id           BigInt   @id @default(autoincrement())
+  imageUrl     String   @map("image_url") @db.VarChar(500)
+  originalName String   @map("original_name") @db.VarChar(255)
+  sortOrder    Int      @default(0) @map("sort_order")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  @@map("promo_images")
+}
+
+// A payment number (one bKash number, one bank account, ...) belonging to
+// an Agent. One agent can hold several of these, same method or mixed.
+model PaymentAccount {
+  id            BigInt   @id @default(autoincrement())
+  agentId       BigInt   @map("agent_id")
+  method        String   @db.VarChar(20)
+  label         String   @db.VarChar(100)
+  accountNumber String   @map("account_number") @db.VarChar(150)
+  accountName   String?  @map("account_name") @db.VarChar(100)
+  details       String?  @db.VarChar(255)
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  agent            Agent             @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  cashTransactions CashTransaction[]
+
+  @@index([agentId])
+  @@map("payment_accounts")
+}
+
+// The agent's own login/profile — one agent can own multiple PaymentAccount
+// numbers (see above). Logs into the CRM separately from staff Accounts,
+// via phone number + password, and only ever sees requests tied to their
+// own numbers.
+model Agent {
+  id           BigInt   @id @default(autoincrement())
+  fullName     String   @map("full_name") @db.VarChar(100)
+  phoneNumber  String   @unique @map("phone_number") @db.VarChar(20)
+  passwordHash String?  @map("password_hash") @db.VarChar(255)
+  // Rate applied by AgentsService.recordLossCommission — but only for
+  // type='commission' agents; 'personal' agents keep this field around
+  // (harmless if set) but it's never actually paid out for them.
+  commission   Decimal  @default(0) @db.Decimal(5, 2)
+  accountLimit Decimal  @default(0) @map("account_limit") @db.Decimal(14, 2)
+  isActive     Boolean  @default(true) @map("is_active")
+
+  // 'personal' (default) — this agent's payment accounts behave exactly as
+  // before: part of the shared pool any player can see/be routed to, no
+  // automatic commission payout, even though a referred player is still
+  // preferentially routed to them.
+  // 'commission' — this agent's payment accounts are hidden from every
+  // player EXCEPT the ones they referred (see PaymentAccountsService), and
+  // they automatically earn `commission`% of every referred player's net
+  // bet loss (see AgentsService.recordLossCommission) — not on deposit
+  // volume, not on the player's wins.
+  type String @default("personal") @db.VarChar(20)
+
+  // Shareable code for this agent's own referral link (e.g. ?agent=CODE at
+  // signup) — every agent gets one regardless of type, since a 'personal'
+  // agent still benefits from the preferential deposit/withdraw routing.
+  referralCode String? @unique @map("referral_code") @db.VarChar(20)
+
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  paymentAccounts  PaymentAccount[]
+  approvedRequests CashTransaction[]
+  referredPlayers  User[]            @relation("AgentReferrals")
+  commissions      AgentCommission[]
+  settlements      AgentSettlement[]
+
+  @@map("agents")
+}
+
+// Real-money commission an agent earns on their referred players' net bet
+// losses — see AgentsService.recordLossCommission, hooked into the same
+// game-callback path as ReferralCommission. Dedup'd via the unique
+// constraint on sourceGameTransactionId (one commission row per bet, at
+// most), same pattern as ReferralCommission's source-transaction uniques.
+model AgentCommission {
+  id                      BigInt   @id @default(autoincrement())
+  agentId                 BigInt   @map("agent_id")
+  playerId                BigInt   @map("player_id")
+  sourceGameTransactionId BigInt   @unique @map("source_game_transaction_id")
+  lossAmount              Decimal  @map("loss_amount") @db.Decimal(14, 2)
+  commissionRate          Decimal  @map("commission_rate") @db.Decimal(5, 2)
+  commissionAmount        Decimal  @map("commission_amount") @db.Decimal(14, 2)
+  createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  agent  Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  player User  @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+  @@index([playerId])
+  @@map("agent_commissions")
+}
+
+// An agent requesting payout of their earned commission, and staff
+// confirming (or rejecting) that request — same request/approve shape as
+// CashTransaction, not a real money movement (agents are paid outside the
+// app either way): confirming just records "staff paid out X on this date,"
+// which AgentsService.getWalletSummary then subtracts from what's still
+// owed. See AgentsService.requestSettlement/confirmSettlement/rejectSettlement.
+model AgentSettlement {
+  id          BigInt    @id @default(autoincrement())
+  agentId     BigInt    @map("agent_id")
+  amount      Decimal   @db.Decimal(14, 2)
+  // The platform's share being settled/reconciled alongside this agent
+  // commission payout — agent-editable at request time (defaults to the
+  // full outstanding platform balance; edited down, the shortfall carries
+  // forward as "due" on the agent's next request). Null on legacy rows
+  // created before this column existed.
+  platformAmount Decimal? @map("platform_amount") @db.Decimal(14, 2)
+  status      String    @default("pending") @db.VarChar(20) // 'pending' | 'completed' | 'rejected'
+  note        String?   @db.VarChar(500)
+  requestedAt DateTime  @default(now()) @map("requested_at") @db.Timestamptz
+  confirmedBy BigInt?   @map("confirmed_by")
+  confirmedAt DateTime? @map("confirmed_at") @db.Timestamptz
+
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  confirmer Account? @relation(fields: [confirmedBy], references: [id])
+
+  @@index([agentId, status])
+  @@map("agent_settlements")
+}
+
+model GameTransaction {
+  id           BigInt   @id @default(autoincrement())
+  userId       BigInt   @map("user_id")
+  gameUid      String   @map("game_uid") @db.VarChar(64)
+  gameRound    String   @map("game_round") @db.VarChar(64)
+  serialNumber String   @unique @map("serial_number") @db.VarChar(64)
+  betAmount    Decimal  @default(0) @map("bet_amount") @db.Decimal(14, 2)
+  winAmount    Decimal  @default(0) @map("win_amount") @db.Decimal(14, 2)
+  currencyCode String   @map("currency_code") @db.VarChar(10)
+  balanceAfter Decimal  @map("balance_after") @db.Decimal(14, 2)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // getMyGameHistory: userId filter + createdAt sort, paginated.
+  @@index([userId, createdAt])
+  @@map("game_transactions")
+}
+
+// A configurable bonus definition an admin creates in the CRM — no code
+// change needed to launch a new promotion. See OfferService for how a
+// real-world event (deposit, KYC approval, ...) is matched against these.
+model Offer {
+  id BigInt @id @default(autoincrement())
+
+  slug          String  @unique @db.VarChar(100)
+  titleBn       String  @map("title_bn") @db.VarChar(200)
+  titleEn       String? @map("title_en") @db.VarChar(200)
+  descriptionBn String? @map("description_bn")
+  descriptionEn String? @map("description_en")
+  imageUrl      String? @map("image_url") @db.VarChar(500)
+  imageUrlEn    String? @map("image_url_en") @db.VarChar(500)
+  bannerUrl     String? @map("banner_url") @db.VarChar(500)
+  bannerUrlEn   String? @map("banner_url_en") @db.VarChar(500)
+  termsBn       String? @map("terms_bn")
+  termsEn       String? @map("terms_en")
+
+  // Rich Detail-popup content — one step per line / one "Label | Value" row
+  // per line respectively, parsed client-side (see bet app's
+  // OfferDetailModal). Null falls back to a heuristic derived from
+  // descriptionBn/En and rewardType/turnoverMultiplier.
+  stepsToClaimBn String? @map("steps_to_claim_bn")
+  stepsToClaimEn String? @map("steps_to_claim_en")
+  bonusInfoBn    String? @map("bonus_info_bn")
+  bonusInfoEn    String? @map("bonus_info_en")
+
+  // When true, both the promotions-page card and the homepage popup render
+  // ONLY the uploaded image — no title/description/reward badge/CTA text,
+  // no padding around it. For a purely-graphic promo banner where the image
+  // itself already says everything.
+  imageOnly Boolean @default(false) @map("image_only")
+
+  // Offers sharing the same non-null groupKey collapse into a single card
+  // on the promotions page (the highest-priority one shown as the cover),
+  // with the rest revealed on click — e.g. the 12-tier referral milestone
+  // ladder shown as one "Referral Milestones" card instead of 12 separate
+  // ones. Null/unset = shown as its own standalone card (existing behavior).
+  groupKey String? @map("group_key") @db.VarChar(100)
+
+  // 'deposit' | 'referral' | 'level' | 'daily' | 'cashback' | 'special'
+  category String @db.VarChar(30)
+
+  // 'first_deposit' | 'nth_deposit' | 'every_deposit' | 'kyc_approved' |
+  // 'vip_levelup' | 'referral_milestone' | 'daily_login' | 'signup' | 'manual_claim'
+  triggerType   String @map("trigger_type") @db.VarChar(50)
+  // Trigger-specific extra config, e.g. { "nth": 2 } for nth_deposit.
+  triggerConfig Json?  @map("trigger_config")
+
+  minDeposit        Decimal? @map("min_deposit") @db.Decimal(14, 2)
+  maxDeposit        Decimal? @map("max_deposit") @db.Decimal(14, 2)
+  requiredVipLevel  Int?     @map("required_vip_level")
+  requiredAgentTier Int?     @map("required_agent_tier")
+  requiresKyc       Boolean  @default(false) @map("requires_kyc")
+  isNewUsersOnly    Boolean  @default(false) @map("is_new_users_only")
+  maxClaimsPerUser  Int      @default(1) @map("max_claims_per_user")
+
+  // 'fixed' | 'percentage' | 'no_reward' | 'random'
+  rewardType   String   @map("reward_type") @db.VarChar(30)
+  rewardAmount Decimal? @map("reward_amount") @db.Decimal(14, 2)
+  rewardCap    Decimal? @map("reward_cap") @db.Decimal(14, 2)
+  // Only used when rewardType = 'random' — a fresh random amount in
+  // [rewardMin, rewardMax] is picked on every claim (e.g. a "lucky envelope"
+  // that pays somewhere between ৳100 and ৳999).
+  rewardMin Decimal? @map("reward_min") @db.Decimal(14, 2)
+  rewardMax Decimal? @map("reward_max") @db.Decimal(14, 2)
+
+  turnoverMultiplier Decimal @default(1) @map("turnover_multiplier") @db.Decimal(5, 2)
+  // 'bonus' | 'deposit_plus_bonus' | 'deposit_only'
+  turnoverBase       String  @default("bonus") @map("turnover_base") @db.VarChar(20)
+  bonusValidityDays  Int?    @default(30) @map("bonus_validity_days")
+
+  // Which games a bet must be placed on to count toward THIS bonus's
+  // turnover requirement — copied onto the granted BonusWallet row at claim
+  // time (see OffersService.applyOffer) so a later edit to the offer never
+  // changes an already-granted bonus's rules. Shape:
+  // { mode: 'all' } | { mode: 'category'; category: GameCategory } |
+  // { mode: 'specific'; games: { gameUid: string; name: string }[] }
+  eligibleGames Json @default("{\"mode\":\"all\"}") @map("eligible_games")
+
+  totalBudget  Decimal? @map("total_budget") @db.Decimal(14, 2)
+  totalClaimed Decimal  @default(0) @map("total_claimed") @db.Decimal(14, 2)
+
+  // Daily-resetting budget cap — when set, the budget check for a new claim
+  // is against TODAY's distributed total (sum of OfferClaim.rewardAmount
+  // since local midnight) instead of the lifetime totalBudget/totalClaimed
+  // pair above. Can be combined with totalBudget for "up to X per day, Y
+  // overall lifetime" — see OffersService.dailyDistributedWhere.
+  dailyBudgetCap Decimal? @map("daily_budget_cap") @db.Decimal(14, 2)
+  // Daily-resetting claim-COUNT cap across all players (distinct from
+  // maxClaimsPerUser, which is a per-player cap) — e.g. "first 1000
+  // envelopes each day." Checked against today's OfferClaim count.
+  dailyClaimCap Int? @map("daily_claim_cap")
+
+  // Optional weighted prize table for rewardType='random', e.g.
+  // [{"amount":50,"weight":40},{"amount":999,"weight":1}] — overrides the
+  // uniform [rewardMin,rewardMax] draw with specific amounts/odds. Null
+  // falls back to the existing uniform-range behavior.
+  rewardDistribution Json? @map("reward_distribution")
+
+  // Day-of-month values this offer auto-recurs on, e.g. [1,11,21] for
+  // Members Day. When non-empty, OffersService periodically rolls
+  // startsAt/endsAt forward to the next occurrence automatically so an
+  // admin never has to hand-edit the window every month. Empty/null = a
+  // one-off manually-scheduled window (existing behavior, unchanged).
+  recurringMonthDays Json? @map("recurring_month_days")
+
+  // 'lifetime' (default, existing behavior) — maxClaimsPerUser counts a
+  // player's claims of this offer ever. 'daily' — counts only claims made
+  // since the start of today, so e.g. maxClaimsPerUser=1 + claimWindow=
+  // 'daily' means "once per calendar day," for a recurring daily-claim
+  // offer like a lucky-envelope drop. See OffersService.matchesConditions.
+  claimWindow String @default("lifetime") @map("claim_window") @db.VarChar(20)
+
+  startsAt DateTime? @map("starts_at") @db.Timestamptz
+  endsAt   DateTime? @map("ends_at") @db.Timestamptz
+  isActive Boolean   @default(true) @map("is_active")
+  priority Int       @default(0)
+
+  claimCount Int @default(0) @map("claim_count")
+
+  // Where this offer is allowed to appear — independent of isActive, so an
+  // offer can power a deposit-page trigger without ever being listed.
+  showInPromotionsPage Boolean @default(true) @map("show_in_promotions_page")
+  showInPopup          Boolean @default(false) @map("show_in_popup")
+  // Homepage popup only — bannerUrl/bannerUrlEn above double as the popup's big image.
+  popupPriority  Int     @default(0) @map("popup_priority")
+  popupCtaTextBn String? @map("popup_cta_text_bn") @db.VarChar(50)
+  popupCtaTextEn String? @map("popup_cta_text_en") @db.VarChar(50)
+  popupCtaLink   String? @map("popup_cta_link") @db.VarChar(255)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  claims           OfferClaim[]
+  cashTransactions CashTransaction[]
+
+  @@index([isActive, category])
+  @@index([isActive, triggerType])
+  @@index([startsAt, endsAt])
+  @@map("offers")
+}
+
+// One record per successful award of an Offer to a user — a permanent,
+// point-in-time snapshot (see metadata) independent of later edits to the
+// Offer itself.
+model OfferClaim {
+  id            BigInt  @id @default(autoincrement())
+  offerId       BigInt  @map("offer_id")
+  userId        BigInt  @map("user_id")
+  bonusWalletId BigInt? @unique @map("bonus_wallet_id")
+
+  triggerAmount Decimal? @map("trigger_amount") @db.Decimal(14, 2)
+  rewardAmount  Decimal  @map("reward_amount") @db.Decimal(14, 2)
+
+  metadata  Json?
+  claimedAt DateTime @default(now()) @map("claimed_at") @db.Timestamptz
+
+  offer       Offer        @relation(fields: [offerId], references: [id])
+  user        User         @relation(fields: [userId], references: [id])
+  bonusWallet BonusWallet? @relation(fields: [bonusWalletId], references: [id])
+
+  @@index([offerId, userId])
+  @@index([userId, claimedAt])
+  @@map("offer_claims")
+}
+
+// A pending or resolved bonus credit. Bonus money never touches
+// User.balance directly — BonusService.processTurnover moves it there only
+// once turnoverRequired is met (see that service for the FIFO rule: only
+// the single oldest active wallet per user ever receives turnover).
+model BonusWallet {
+  id     BigInt @id @default(autoincrement())
+  userId BigInt @map("user_id")
+
+  // The offer's slug at claim time.
+  type             String  @db.VarChar(50)
+  amount           Decimal @db.Decimal(14, 2)
+  turnoverRequired Decimal @map("turnover_required") @db.Decimal(14, 2)
+  turnoverDone     Decimal @default(0) @map("turnover_done") @db.Decimal(14, 2)
+
+  // 'active' | 'completed' | 'forfeited' | 'expired'
+  status String @default("active") @db.VarChar(20)
+
+  expiresAt   DateTime? @map("expires_at") @db.Timestamptz
+  claimedAt   DateTime  @default(now()) @map("claimed_at") @db.Timestamptz
+  completedAt DateTime? @map("completed_at") @db.Timestamptz
+
+  metadata Json?
+
+  // Snapshot of the granting Offer's eligibleGames at claim time — null for
+  // every non-offer bonus type (deposit_turnover, referral_signup_bonus,
+  // vip_level_*, daily_cashback), which stay unrestricted exactly as
+  // before. See BonusService.processTurnover for how this gates which bets
+  // count toward this specific bonus's turnover.
+  eligibleGames Json? @map("eligible_games")
+
+  user       User        @relation(fields: [userId], references: [id])
+  offerClaim    OfferClaim?
+  vipUpgradeLog VipUpgradeLog?
+  referral      Referral?
+  cashbackGrant CashbackGrant?
+
+  @@index([userId, status, claimedAt])
+  @@index([status, expiresAt])
+  @@map("bonus_wallets")
+}
+
+// Static config for the 51 VIP levels (0-50) — seeded once via
+// scripts/seed-vip-tiers.ts, edited afterward through the CRM. Held in
+// VipService's in-memory cache at runtime (rarely changes, same pattern as
+// the game catalog cache) rather than re-queried on every deposit/bet.
+model VipTier {
+  level     Int    @id
+  // 'Newcomer' | 'Bronze' | 'Silver' | 'Gold' | 'Platinum' | 'Diamond'
+  groupName String @map("group_name") @db.VarChar(30)
+  nameBn    String @map("name_bn") @db.VarChar(100)
+  nameEn    String @map("name_en") @db.VarChar(100)
+
+  // Both thresholds must be met (lifetime totals) to reach this level.
+  requiredDeposit Decimal @map("required_deposit") @db.Decimal(14, 2)
+  requiredBet     Decimal @map("required_bet") @db.Decimal(14, 2)
+
+  // Bonus auto-granted (as a BonusWallet, same FIFO/turnover mechanics as
+  // an offer claim) the moment a player crosses into this level.
+  bonusAmount        Decimal @default(0) @map("bonus_amount") @db.Decimal(14, 2)
+  turnoverMultiplier Decimal @default(1) @map("turnover_multiplier") @db.Decimal(5, 2)
+  bonusValidityDays  Int?    @map("bonus_validity_days")
+
+  // Referral/cashback perks, paid out automatically as real balance credit —
+  // see ReferralService.checkReferralMilestone / recordBetCommission /
+  // recordDepositCommission, and CashbackService.grantForUser.
+  referralSignupBonus      Decimal @default(0) @map("referral_signup_bonus") @db.Decimal(14, 2)
+  // Direct (tier-1) referral's own bet commission rate.
+  referralBetCommissionPct Decimal @default(0) @map("referral_bet_commission_pct") @db.Decimal(6, 4)
+  // 2nd/3rd-level upline bet commission — each paid at the RATE OF THAT
+  // PERSON'S OWN VIP tier (same convention as tier-1), not the original
+  // bettor's tier. See ReferralService.recordBetCommission.
+  referralBetCommissionPctTier2 Decimal @default(0) @map("referral_bet_commission_pct_tier2") @db.Decimal(6, 4)
+  referralBetCommissionPctTier3 Decimal @default(0) @map("referral_bet_commission_pct_tier3") @db.Decimal(6, 4)
+  // Recurring commission paid to the direct referrer on EVERY approved
+  // deposit their referred player makes (not just the first) — separate
+  // from the one-time referralSignupBonus milestone.
+  referralDepositCommissionPct Decimal @default(0) @map("referral_deposit_commission_pct") @db.Decimal(6, 4)
+  dailyCashbackPct         Decimal @default(0) @map("daily_cashback_pct") @db.Decimal(6, 4)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  upgrades VipUpgradeLog[]
+
+  @@map("vip_tiers")
+}
+
+// One row per level a player crosses (a single deposit/bet can jump several
+// levels at once — each gets its own row and, if the tier has one, its own
+// bonus grant).
+model VipUpgradeLog {
+  id     BigInt @id @default(autoincrement())
+  userId BigInt @map("user_id")
+
+  fromLevel Int @map("from_level")
+  toLevel   Int @map("to_level")
+
+  lifetimeDepositAtUpgrade Decimal @map("lifetime_deposit_at_upgrade") @db.Decimal(14, 2)
+  lifetimeBetAtUpgrade     Decimal @map("lifetime_bet_at_upgrade") @db.Decimal(14, 2)
+
+  bonusWalletId BigInt? @unique @map("bonus_wallet_id")
+
+  // Set when an admin manually moves a user's level instead of the
+  // automatic deposit/bet calculation reaching it on its own.
+  isManualOverride Boolean @default(false) @map("is_manual_override")
+  overrideReason   String? @map("override_reason")
+  overrideBy       String? @map("override_by") @db.VarChar(50)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user        User         @relation(fields: [userId], references: [id])
+  tier        VipTier      @relation(fields: [toLevel], references: [level])
+  bonusWallet BonusWallet? @relation(fields: [bonusWalletId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("vip_upgrade_logs")
+}
+
+// One row per successfully-linked referral (User.referralCode entered at
+// signup, resolved against the referrer's User.ownReferralCode). The
+// signup-bonus milestone deliberately piggybacks on the existing VIP
+// auto-upgrade event instead of tracking its own deposit/bet thresholds —
+// see ReferralService.onReferredUserLeveledUp, called from
+// VipService.upgradeUserToLevel — so there's exactly one place in the app
+// that decides "has this player become real," not two.
+model Referral {
+  id         BigInt @id @default(autoincrement())
+  referrerId BigInt @map("referrer_id")
+  referredId BigInt @unique @map("referred_id")
+
+  referralCode String @map("referral_code") @db.VarChar(20)
+
+  // 'pending' | 'milestone_met' | 'fraud_flagged'
+  status               String    @default("pending") @db.VarChar(20)
+  signupBonusGrantedAt DateTime? @map("signup_bonus_granted_at")
+  bonusWalletId        BigInt?   @unique @map("bonus_wallet_id")
+
+  // IP-only anti-fraud snapshot at signup — cheap, always available on every
+  // request. Deliberately skips device fingerprinting (would need new
+  // client-side instrumentation the bet app doesn't have yet).
+  signupIp   String? @map("signup_ip") @db.VarChar(45)
+  fraudFlags Json?   @map("fraud_flags")
+
+  reviewedAt  DateTime? @map("reviewed_at") @db.Timestamptz
+  reviewedBy  String?   @map("reviewed_by") @db.VarChar(50)
+  reviewNotes String?   @map("review_notes")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  referrer    User         @relation("Referrer", fields: [referrerId], references: [id])
+  referred    User         @relation("Referred", fields: [referredId], references: [id])
+  bonusWallet BonusWallet? @relation(fields: [bonusWalletId], references: [id])
+  commissions ReferralCommission[]
+
+  @@index([referrerId])
+  @@index([status])
+  @@map("referrals")
+}
+
+// Audit log of every referral commission credit — bet (tier 1-3) and
+// deposit commission alike. Commission is real, immediately withdrawable
+// money (per the product decision: no separate commission wallet/turnover),
+// so it's credited to User.balance directly in the same transaction that
+// creates this row, not staged through BonusWallet.
+model ReferralCommission {
+  id         BigInt @id @default(autoincrement())
+  referrerId BigInt @map("referrer_id")
+  referredId BigInt @map("referred_id")
+  referralId BigInt @map("referral_id")
+
+  // 'bet_tier1' | 'bet_tier2' | 'bet_tier3' | 'deposit'
+  type String @default("bet_tier1") @db.VarChar(20)
+
+  // Exactly one of these is set, matching `type` — nullable because a
+  // deposit-commission row has no GameTransaction and vice versa.
+  sourceGameTransactionId BigInt? @map("source_game_transaction_id")
+  sourceCashTransactionId BigInt? @map("source_cash_transaction_id")
+  // The bet amount (bet_tier*) or deposit amount (deposit) commission was
+  // calculated from — kept as `betAmount` rather than renamed, to avoid
+  // touching every existing read site for what's still the same number.
+  betAmount               Decimal @map("bet_amount") @db.Decimal(14, 2)
+  commissionRate          Decimal @map("commission_rate") @db.Decimal(6, 4)
+  commissionAmount        Decimal @map("commission_amount") @db.Decimal(14, 2)
+
+  // Snapshot — the rate itself can change later if the referrer's VIP level changes.
+  referrerVipLevelAtEvent Int @map("referrer_vip_level_at_event")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  referrer User     @relation("CommissionReferrer", fields: [referrerId], references: [id])
+  referred User     @relation("CommissionReferred", fields: [referredId], references: [id])
+  referral Referral @relation(fields: [referralId], references: [id])
+
+  @@index([referrerId, createdAt])
+  // DB-enforced double-payment guards, not just an app-level check — a
+  // retried/concurrent recordBetCommission or recordDepositCommission call
+  // for the same source event hits a unique-constraint error instead of
+  // creating a second row. NULLs don't collide in Postgres, so each
+  // constraint only ever applies to the row type that actually sets it
+  // (bet_tier* rows always have sourceCashTransactionId = null and vice
+  // versa) — a bet's 3 tiers still get 3 separate rows, one per `type`.
+  @@unique([sourceGameTransactionId, type])
+  @@unique([sourceCashTransactionId, type])
+  @@map("referral_commissions")
+}
+
+// One row per user per calendar day — the unique constraint is what makes
+// the daily cashback sweep idempotent (safe to re-run/retry without
+// double-granting). Unlike commission, cashback DOES carry turnover, so it
+// reuses the exact same BonusWallet-grant pattern as VIP/Offers instead of
+// inventing a new payout path.
+model CashbackGrant {
+  id              BigInt   @id @default(autoincrement())
+  userId          BigInt   @map("user_id")
+  calculationDate DateTime @map("calculation_date") @db.Date
+
+  netLoss        Decimal @map("net_loss") @db.Decimal(14, 2)
+  cashbackRate   Decimal @map("cashback_rate") @db.Decimal(6, 4)
+  cashbackAmount Decimal @map("cashback_amount") @db.Decimal(14, 2)
+
+  vipLevelAtCalculation Int     @map("vip_level_at_calculation")
+  bonusWalletId         BigInt? @unique @map("bonus_wallet_id")
+
+  totalBetPrevDay Decimal @map("total_bet_prev_day") @db.Decimal(14, 2)
+  totalWinPrevDay Decimal @map("total_win_prev_day") @db.Decimal(14, 2)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user        User         @relation(fields: [userId], references: [id])
+  bonusWallet BonusWallet? @relation(fields: [bonusWalletId], references: [id])
+
+  @@unique([userId, calculationDate])
+  @@index([calculationDate])
+  @@map("cashback_grants")
+}
+
+// Audit/history only — the live streak value lives on User itself
+// (loginStreak/longestLoginStreak/lastLoginDate), same split as
+// VipUpgradeLog (live value on User.vipLevel, history in its own table).
+model LoginStreakLog {
+  id     BigInt @id @default(autoincrement())
+  userId BigInt @map("user_id")
+
+  loginDate   DateTime @map("login_date") @db.Date
+  streakDay   Int      @map("streak_day")
+  isMilestone Boolean  @default(false) @map("is_milestone")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, loginDate])
+  @@map("login_streak_logs")
+}
+
+// In-app notifications (VIP level-up, referral bonus, cashback, KYC/deposit/
+// withdrawal decisions, etc). No titleBn/titleEn columns — the bet app
+// renders bilingual text client-side from `type` + `metadata`, the same
+// pattern already used for VIP tier names and offer categories elsewhere.
+model Notification {
+  id     BigInt @id @default(autoincrement())
+  userId BigInt @map("user_id")
+
+  type     String @db.VarChar(40)
+  metadata Json?
+
+  isRead Boolean   @default(false) @map("is_read")
+  readAt DateTime? @map("read_at") @db.Timestamptz
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+// Staff-editable per-game fixes layered on top of Oracle's live catalog
+// (never stored wholesale — the catalog itself stays a 10-minute in-memory
+// cache fetched straight from Oracle, see GamesService). gameUid is the
+// game's real/canonical uid as Oracle's catalog reports it — the lookup
+// key used everywhere else in the app (GameTransaction, history, category
+// counts). overrideGameUid is a *different* uid Oracle wants used only for
+// the actual /getgameurl launch call (e.g. a country-specific variant) —
+// GamesService substitutes it going out and translates Oracle's callback
+// back to the real gameUid coming in, so nothing outside the launch/
+// callback boundary ever sees the substitute uid. overrideThumbnail
+// replaces a broken image URL. name/providerName are cached only so the
+// CRM's game list still shows something meaningful for a game that's
+// since disappeared from Oracle's own catalog.
+model GameOverride {
+  id                BigInt   @id @default(autoincrement())
+  gameUid           String   @unique @map("game_uid") @db.VarChar(200)
+  name              String?  @db.VarChar(200)
+  providerName      String?  @map("provider_name") @db.VarChar(100)
+  overrideGameUid   String?  @map("override_game_uid") @db.VarChar(200)
+  overrideThumbnail String?  @map("override_thumbnail") @db.VarChar(500)
+  // Staff kill switch — false hides the game from every public catalog/play
+  // route while leaving it fully visible (with its overrides intact) in the
+  // CRM admin list. Absent row / no override at all means active (default).
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([overrideGameUid])
+  @@map("game_overrides")
+}
+
+// --- Spin & Win ---
+
+model SpinPrize {
+  id   BigInt  @id @default(autoincrement())
+  labelBn String @map("label_bn") @db.VarChar(100)
+  labelEn String? @map("label_en") @db.VarChar(100)
+  imageUrl String? @map("image_url") @db.VarChar(255)
+
+  // 'cash' credits User.balance instantly. 'points' credits PointsBalance
+  // instantly (via RewardsService.grantPoints). 'physical' logs the win for
+  // manual CRM fulfillment, no auto-credit. 'free_spins' grants extra
+  // SpinTicketBalance.ticketCount. Plain String, not a Prisma enum — same
+  // convention as CashTransaction.type/Offer.rewardType elsewhere in this
+  // schema, so a new type never needs a migration.
+  prizeType String @map("prize_type") @db.VarChar(20)
+  cashAmount Decimal? @map("cash_amount") @db.Decimal(14, 2)
+  pointsAmount Int? @map("points_amount")
+  freeSpinsQty Int? @map("free_spins_qty")
+
+  weight Int @default(1)
+  // Scarcity cap. null = unlimited. Sold-out prizes are excluded from the
+  // weighted roll entirely (see SpinWheelService.spin), not re-rolled.
+  maxWins Int? @map("max_wins")
+  currentWinCount Int @default(0) @map("current_win_count")
+
+  wedgeColor String @default("#facc15") @map("wedge_color") @db.VarChar(9)
+  sortOrder Int @default(0) @map("sort_order")
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  results SpinResult[]
+
+  @@index([isActive, sortOrder])
+  @@map("spin_prizes")
+}
+
+model SpinResult {
+  id      BigInt   @id @default(autoincrement())
+  userId  BigInt   @map("user_id")
+  prizeId BigInt   @map("prize_id")
+  wonAt   DateTime @default(now()) @map("won_at") @db.Timestamptz
+
+  // Only meaningful for prizeType='physical' — cash/points/free_spins wins
+  // are auto-fulfilled at write time.
+  fulfilled   Boolean   @default(false)
+  fulfilledAt DateTime? @map("fulfilled_at") @db.Timestamptz
+  fulfilledBy BigInt?   @map("fulfilled_by")
+  fulfillNote String?   @map("fulfill_note") @db.VarChar(500)
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  prize     SpinPrize @relation(fields: [prizeId], references: [id], onDelete: Restrict)
+  fulfiller Account?  @relation(fields: [fulfilledBy], references: [id], onDelete: SetNull)
+
+  @@index([wonAt])
+  @@index([userId, wonAt])
+  @@index([fulfilled, wonAt])
+  @@map("spin_results")
+}
+
+model SpinTicketBalance {
+  userId           BigInt    @id @map("user_id")
+  ticketCount      Int       @default(0) @map("ticket_count")
+  lastFreeTicketAt DateTime? @map("last_free_ticket_at") @db.Timestamptz
+  updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("spin_ticket_balances")
+}
+
+// --- Points + Rewards Catalog ---
+
+model PointsBalance {
+  userId    BigInt   @id @map("user_id")
+  points    Int      @default(0)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("points_balances")
+}
+
+// Audit trail for every points change — required since this is a real
+// ledger, not just a counter. 'reason' stays a plain String (same
+// convention as elsewhere) so a new earn source never needs a migration.
+model PointsLedgerEntry {
+  id        BigInt   @id @default(autoincrement())
+  userId    BigInt   @map("user_id")
+  delta     Int // positive = earned, negative = spent
+  reason    String   @db.VarChar(30) // 'spin_win' | 'catalog_redemption'
+  refId     BigInt?  @map("ref_id") // SpinResult.id or RewardRedemption.id
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("points_ledger_entries")
+}
+
+model RewardCatalogItem {
+  id            BigInt   @id @default(autoincrement())
+  nameBn        String   @map("name_bn") @db.VarChar(100)
+  nameEn        String?  @map("name_en") @db.VarChar(100)
+  imageUrl      String?  @map("image_url") @db.VarChar(255)
+  descriptionBn String?  @map("description_bn")
+  descriptionEn String?  @map("description_en")
+  pointsCost    Int      @map("points_cost")
+  // null = unlimited stock.
+  stock         Int?     @map("stock")
+  redeemedCount Int      @default(0) @map("redeemed_count")
+  sortOrder     Int      @default(0) @map("sort_order")
+  isActive      Boolean  @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  redemptions RewardRedemption[]
+
+  @@index([isActive, sortOrder])
+  @@map("reward_catalog_items")
+}
+
+model RewardRedemption {
+  id          BigInt   @id @default(autoincrement())
+  userId      BigInt   @map("user_id")
+  itemId      BigInt   @map("item_id")
+  pointsSpent Int      @map("points_spent")
+  redeemedAt  DateTime @default(now()) @map("redeemed_at") @db.Timestamptz
+
+  fulfilled   Boolean   @default(false)
+  fulfilledAt DateTime? @map("fulfilled_at") @db.Timestamptz
+  fulfilledBy BigInt?   @map("fulfilled_by")
+  fulfillNote String?   @map("fulfill_note") @db.VarChar(500)
+
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  item      RewardCatalogItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  fulfiller Account?          @relation(fields: [fulfilledBy], references: [id], onDelete: SetNull)
+
+  @@index([fulfilled, redeemedAt])
+  @@index([userId, redeemedAt])
+  @@map("reward_redemptions")
+}

@@ -1,0 +1,490 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateCashTransactionDto } from './dto/create-cash-transaction.dto';
+import { ResolveCashTransactionDto } from './dto/resolve-cash-transaction.dto';
+import { OffersService } from '../offers/offers.service';
+import { BonusService, DEPOSIT_TURNOVER_TYPE } from '../bonus/bonus.service';
+import { VipService } from '../vip/vip.service';
+import { ReferralService } from '../referral/referral.service';
+import { NotificationService } from '../notification/notification.service';
+import { BalanceService } from '../balance/balance.service';
+import { Prisma } from '../../generated/prisma/client';
+
+type AgentAccount = {
+  label: string;
+  accountNumber: string;
+  agentId: bigint;
+} | null;
+
+type CashTransactionRow = {
+  id: bigint;
+  type: string;
+  method: string;
+  amount: unknown;
+  reference: string | null;
+  status: string;
+  createdAt: Date;
+  user: { fullName: string };
+  reviewer: { username: string } | null;
+  approvingAgent: { fullName: string } | null;
+  paymentAccount: AgentAccount;
+};
+
+type MyCashTransactionRow = {
+  id: bigint;
+  type: string;
+  method: string;
+  amount: unknown;
+  reference: string | null;
+  status: string;
+  createdAt: Date;
+  paymentAccount: AgentAccount;
+};
+
+const ADMIN_INCLUDE = {
+  user: true,
+  reviewer: true,
+  approvingAgent: true,
+  paymentAccount: true,
+} as const;
+
+@Injectable()
+export class TransactionsService {
+  private readonly logger = new Logger(TransactionsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly offersService: OffersService,
+    private readonly bonusService: BonusService,
+    private readonly vipService: VipService,
+    private readonly referralService: ReferralService,
+    private readonly notificationService: NotificationService,
+    private readonly balanceService: BalanceService,
+  ) {}
+
+  private toAdmin(row: CashTransactionRow) {
+    return {
+      id: row.id.toString(),
+      type: row.type,
+      player: row.user.fullName,
+      method: row.method,
+      reference: row.reference,
+      amount: Number(row.amount),
+      status: row.status,
+      createdAt: row.createdAt.toISOString(),
+      reviewedBy: row.reviewer?.username ?? null,
+      approvedByAgentName: row.approvingAgent?.fullName ?? null,
+      agentLabel: row.paymentAccount?.label ?? null,
+      agentAccountNumber: row.paymentAccount?.accountNumber ?? null,
+    };
+  }
+
+  private toMine(row: MyCashTransactionRow) {
+    return {
+      id: row.id.toString(),
+      type: row.type,
+      method: row.method,
+      reference: row.reference,
+      amount: Number(row.amount),
+      status: row.status,
+      createdAt: row.createdAt.toISOString(),
+      agentLabel: row.paymentAccount?.label ?? null,
+      agentAccountNumber: row.paymentAccount?.accountNumber ?? null,
+    };
+  }
+
+  // Resolves which agent payment account a request is tied to. A cash-in
+  // passes the exact account it showed the player (requestedId) so the
+  // record matches what they actually saw; a cash-out never has one to
+  // pass (the player picks no account when withdrawing). A player referred
+  // by an agent is exclusive to that agent — their request always routes
+  // there, and NEVER falls back to the general pool or another agent, even
+  // if that agent has no active account for the method (this deliberately
+  // can leave paymentAccountId null) or if requestedId names some other
+  // account (ignored rather than trusted — the frontend only ever shows a
+  // referred player their own agent's numbers, so a mismatched requestedId
+  // can only mean a stale/crafted request). Only a player with no
+  // referring agent uses the general pool, requestedId included.
+  private async resolvePaymentAccountId(
+    userId: bigint,
+    method: string,
+    requestedId?: string,
+  ): Promise<bigint | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { referredByAgentId: true },
+    });
+
+    if (user?.referredByAgentId) {
+      if (requestedId) {
+        const account = await this.prisma.paymentAccount.findUnique({
+          where: { id: BigInt(requestedId) },
+        });
+        if (
+          account &&
+          account.method === method &&
+          account.agentId === user.referredByAgentId
+        ) {
+          return account.id;
+        }
+      }
+      const agentAccount = await this.prisma.paymentAccount.findFirst({
+        where: {
+          method,
+          isActive: true,
+          agentId: user.referredByAgentId,
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+      return agentAccount?.id ?? null;
+    }
+
+    if (requestedId) {
+      const account = await this.prisma.paymentAccount.findUnique({
+        where: { id: BigInt(requestedId) },
+      });
+      if (account && account.method === method) return account.id;
+    }
+
+    const fallback = await this.prisma.paymentAccount.findFirst({
+      where: { method, isActive: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    return fallback?.id ?? null;
+  }
+
+  // A player's own deposit + withdrawal history, both types merged into one
+  // feed newest-first — the CRM's admin lists (findCashIn/findCashOut) stay
+  // split by type since staff review each queue separately.
+  async findMine(userId: string) {
+    const rows = await this.prisma.cashTransaction.findMany({
+      where: { userId: BigInt(userId) },
+      include: { paymentAccount: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((r) => this.toMine(r));
+  }
+
+  // An agent's own deposit + withdrawal requests — only ones tied to a
+  // payment account they own, both types merged newest-first (mirrors
+  // findMine for players).
+  async findByAgent(agentId: string) {
+    const rows = await this.prisma.cashTransaction.findMany({
+      where: { paymentAccount: { agentId: BigInt(agentId) } },
+      include: ADMIN_INCLUDE,
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((r) => this.toAdmin(r));
+  }
+
+  async findCashIn() {
+    const rows = await this.prisma.cashTransaction.findMany({
+      where: { type: 'cash_in' },
+      include: ADMIN_INCLUDE,
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((r) => this.toAdmin(r));
+  }
+
+  async findCashOut() {
+    const rows = await this.prisma.cashTransaction.findMany({
+      where: { type: 'cash_out' },
+      include: ADMIN_INCLUDE,
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((r) => this.toAdmin(r));
+  }
+
+  // Cash-in has no KYC/active gate — a brand new, unverified player can
+  // still deposit; it's only withdrawals that require verification.
+  async createCashIn(userId: string, dto: CreateCashTransactionDto) {
+    const paymentAccountId = await this.resolvePaymentAccountId(
+      BigInt(userId),
+      dto.method,
+      dto.paymentAccountId,
+    );
+    const tx = await this.prisma.cashTransaction.create({
+      data: {
+        userId: BigInt(userId),
+        type: 'cash_in',
+        method: dto.method,
+        amount: dto.amount,
+        reference: dto.reference.trim(),
+        paymentAccountId,
+        offerId: dto.offerId ? BigInt(dto.offerId) : null,
+        noOffer: dto.noOffer ?? false,
+      },
+      include: ADMIN_INCLUDE,
+    });
+    return this.toAdmin(tx);
+  }
+
+  async createCashOut(userId: string, dto: CreateCashTransactionDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: BigInt(userId) },
+      include: { kycVerification: true },
+    });
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+    if (!user.isActive) {
+      throw new ForbiddenException(
+        'Your account has been deactivated. Contact support for help.',
+      );
+    }
+    if (user.kycVerification?.status !== 'verified') {
+      throw new ForbiddenException(
+        'Complete KYC verification before requesting a withdrawal.',
+      );
+    }
+    const canWithdraw = await this.bonusService.canWithdraw(
+      user.id,
+      new Prisma.Decimal(dto.amount),
+    );
+    if (!canWithdraw.allowed) {
+      throw new ForbiddenException(canWithdraw.reason);
+    }
+
+    const paymentAccountId = await this.resolvePaymentAccountId(
+      user.id,
+      dto.method,
+    );
+    const tx = await this.prisma.cashTransaction.create({
+      data: {
+        userId: user.id,
+        type: 'cash_out',
+        method: dto.method,
+        amount: dto.amount,
+        reference: dto.reference.trim(),
+        paymentAccountId,
+      },
+      include: ADMIN_INCLUDE,
+    });
+    return this.toAdmin(tx);
+  }
+
+  // Looks up whoever is resolving this request — a staff Account by
+  // username, or an Agent by id who must own the transaction's payment
+  // account. Throws if neither identity checks out.
+  private async resolveApprover(
+    tx: { paymentAccountId: bigint | null },
+    dto: ResolveCashTransactionDto,
+  ): Promise<{ reviewedBy?: bigint; approvedByAgentId?: bigint }> {
+    if (dto.agentId) {
+      if (!tx.paymentAccountId) {
+        throw new ForbiddenException(
+          'This request has no agent account attached to approve against.',
+        );
+      }
+      const account = await this.prisma.paymentAccount.findUnique({
+        where: { id: tx.paymentAccountId },
+      });
+      if (!account || account.agentId !== BigInt(dto.agentId)) {
+        throw new ForbiddenException(
+          'This request is not tied to your agent account.',
+        );
+      }
+      return { approvedByAgentId: BigInt(dto.agentId) };
+    }
+    if (dto.reviewerUsername) {
+      const reviewer = await this.prisma.account.findUnique({
+        where: { username: dto.reviewerUsername },
+      });
+      if (!reviewer) {
+        throw new NotFoundException('Reviewer account not found.');
+      }
+      return { reviewedBy: reviewer.id };
+    }
+    throw new BadRequestException(
+      'Either reviewerUsername or agentId is required.',
+    );
+  }
+
+  async approve(id: string, dto: ResolveCashTransactionDto) {
+    const tx = await this.prisma.cashTransaction.findUnique({
+      where: { id: BigInt(id) },
+    });
+    if (!tx) {
+      throw new NotFoundException('Transaction not found.');
+    }
+    if (tx.status !== 'pending') {
+      throw new ConflictException(
+        'This transaction has already been resolved.',
+      );
+    }
+    const approver = await this.resolveApprover(tx, dto);
+
+    await this.prisma.$transaction(async (db) => {
+      if (tx.type === 'cash_in') {
+        await db.user.update({
+          where: { id: tx.userId },
+          data: { balance: { increment: tx.amount } },
+        });
+        // Every deposit carries its own 1x turnover requirement, stacking
+        // with whatever bonus turnover is also active — see BonusService
+        // for how this gates withdrawal and why it's excluded from the
+        // balance-credit step when it completes (already credited above).
+        await db.bonusWallet.create({
+          data: {
+            userId: tx.userId,
+            type: DEPOSIT_TURNOVER_TYPE,
+            amount: tx.amount,
+            turnoverRequired: tx.amount,
+            expiresAt: null,
+          },
+        });
+      } else {
+        const user = await db.user.findUniqueOrThrow({
+          where: { id: tx.userId },
+        });
+        if (Number(user.balance) < Number(tx.amount)) {
+          throw new ConflictException(
+            "Player's balance is no longer sufficient for this withdrawal.",
+          );
+        }
+        await db.user.update({
+          where: { id: tx.userId },
+          data: {
+            balance: { decrement: tx.amount },
+            lifetimeWithdrawnAmount: { increment: tx.amount },
+          },
+        });
+      }
+      await db.cashTransaction.update({
+        where: { id: tx.id },
+        data: {
+          status: 'completed',
+          reviewedAt: new Date(),
+          ...approver,
+        },
+      });
+    });
+
+    this.balanceService.notifyChanged(tx.userId);
+
+    // Offer triggers run after the approval itself has committed, and never
+    // undo it — a bug in bonus-awarding must never block or roll back an
+    // otherwise-valid deposit/withdrawal approval.
+    if (tx.type === 'cash_in') {
+      await this.fireDepositTriggers(tx.userId, tx.amount, tx.offerId, tx.noOffer);
+
+      try {
+        await this.vipService.recordDeposit(tx.userId, tx.amount);
+      } catch (err) {
+        this.logger.error(
+          `VIP deposit tracking failed for user ${tx.userId}: ${(err as Error).message}`,
+        );
+      }
+
+      try {
+        await this.referralService.checkReferralMilestone(tx.userId);
+      } catch (err) {
+        this.logger.error(
+          `Referral milestone check failed for user ${tx.userId}: ${(err as Error).message}`,
+        );
+      }
+
+      try {
+        await this.referralService.recordDepositCommission(
+          tx.userId,
+          tx.amount,
+          tx.id,
+        );
+      } catch (err) {
+        this.logger.error(
+          `Deposit commission failed for user ${tx.userId}: ${(err as Error).message}`,
+        );
+      }
+
+      await this.notificationService.create(tx.userId, 'deposit_approved', {
+        amount: tx.amount.toString(),
+      });
+    } else {
+      await this.notificationService.create(tx.userId, 'withdrawal_approved', {
+        amount: tx.amount.toString(),
+      });
+    }
+
+    return { success: true };
+  }
+
+  private async fireDepositTriggers(
+    userId: bigint,
+    amount: Prisma.Decimal,
+    offerId: bigint | null,
+    noOffer: boolean,
+  ) {
+    // The player explicitly declined every promotion on this deposit —
+    // processTrigger would otherwise auto-match some OTHER eligible offer
+    // when offerId is empty (that fallback exists for deposits made with
+    // no explicit choice at all, e.g. no offers were ever shown), which
+    // silently grants a bonus the player just said they didn't want.
+    if (noOffer) return;
+
+    try {
+      const depositCount = await this.prisma.cashTransaction.count({
+        where: { userId, type: 'cash_in', status: 'completed' },
+      });
+
+      if (depositCount === 1) {
+        await this.offersService.processTrigger(
+          { type: 'first_deposit', userId, amount },
+          offerId ?? undefined,
+        );
+      } else {
+        await this.offersService.processTrigger(
+          { type: 'nth_deposit', userId, amount, depositCount },
+          offerId ?? undefined,
+        );
+      }
+      await this.offersService.processTrigger(
+        { type: 'every_deposit', userId, amount },
+        offerId ?? undefined,
+      );
+    } catch (err) {
+      // Never let a broken offer definition break a real deposit approval.
+      this.logger.error(
+        `Offer trigger failed for user ${userId}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  async reject(id: string, dto: ResolveCashTransactionDto) {
+    const tx = await this.prisma.cashTransaction.findUnique({
+      where: { id: BigInt(id) },
+    });
+    if (!tx) {
+      throw new NotFoundException('Transaction not found.');
+    }
+    if (tx.status !== 'pending') {
+      throw new ConflictException(
+        'This transaction has already been resolved.',
+      );
+    }
+    const approver = await this.resolveApprover(tx, dto);
+
+    await this.prisma.cashTransaction.update({
+      where: { id: tx.id },
+      data: {
+        status: 'failed',
+        reviewedAt: new Date(),
+        ...approver,
+      },
+    });
+
+    if (tx.type === 'cash_out') {
+      await this.notificationService.create(tx.userId, 'withdrawal_rejected', {
+        amount: tx.amount.toString(),
+      });
+    }
+
+    return { success: true };
+  }
+}
