@@ -351,9 +351,11 @@ export function pinnedSlotsIndex(
 // were left out rather than guessed. Unlike PINNED_SLOTS_ORDER, this
 // doesn't override a game's normal category — a game can be both e.g. Slots
 // and Hot Games at once (see the `hotGames` boolean on CatalogGame, same
-// pattern as `featured`).
+// pattern as `featured`). 9Wicket was added after the original 35 and
+// pinned first, operator request — everything else keeps its original order.
 export const PINNED_HOT_GAMES_ORDER: { name: string; providerCode: string }[] =
   [
+    { name: '9Wicket', providerCode: '9W' },
     { name: 'Super Ace', providerCode: 'JL' },
     { name: 'Fortune Gems', providerCode: 'JL' },
     { name: 'Money Coming', providerCode: 'JL' },
@@ -531,18 +533,19 @@ export function pinnedFishingIndex(
 }
 
 // Explicit operator-supplied display order for the (now narrowed) Sports
-// section — every game from SABA shows first, then every UG game, then BTI,
-// and so on, one provider block at a time (games within a provider keep
-// their existing relative order, since sort is stable). Matches the 6
-// providers still routed to `sports` in SPORTS_ESPORTS_PROVIDER_OVERRIDE;
-// this only controls ordering, not which category a game lands in.
+// section — 9Wicket shows first (operator request), then every SABA game,
+// then UG, then BTI, and so on, one provider block at a time (games within
+// a provider keep their existing relative order, since sort is stable).
+// Matches the 6 providers still routed to `sports` in
+// SPORTS_ESPORTS_PROVIDER_OVERRIDE; this only controls ordering, not which
+// category a game lands in.
 export const SPORTS_PROVIDER_ORDER: string[] = [
+  '9W',
   'SABA',
   'UG',
   'BTI',
   'SBO',
   'BETBY',
-  '9W',
 ];
 
 const SPORTS_PROVIDER_ORDER_LOOKUP = new Map(
