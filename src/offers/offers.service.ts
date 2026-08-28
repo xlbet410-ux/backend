@@ -1039,7 +1039,28 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
     offer: Awaited<ReturnType<typeof this.prisma.offer.findFirst>> & object,
     trigger: OfferTrigger,
   ) {
-    const amount = 'amount' in trigger ? trigger.amount : undefined;
+    let amount = 'amount' in trigger ? trigger.amount : undefined;
+
+    // A monthlyPrincipalLoss-gated offer (see matchesConditions) has no
+    // natural `amount` from its trigger — manual_claim carries none at
+    // all. For a percentage-type reward on this kind of offer, the reward
+    // basis IS that computed loss (e.g. "4% cashback on this month's net
+    // loss"), so recompute the same figure matchesConditions already
+    // gated this claim on.
+    const lossCfg = (
+      offer.triggerConfig as {
+        monthlyPrincipalLoss?: { gameUid?: string; threshold?: number };
+      } | null
+    )?.monthlyPrincipalLoss;
+    if (lossCfg?.gameUid) {
+      amount = await computeMonthlyPrincipalLoss(
+        this.prisma,
+        trigger.userId,
+        this.startOfCurrentMonth(),
+        lossCfg.gameUid,
+      );
+    }
+
     const rewardAmount = this.calculateReward(offer, amount);
 
     if (rewardAmount.lessThanOrEqualTo(0) && offer.rewardType !== 'no_reward')
