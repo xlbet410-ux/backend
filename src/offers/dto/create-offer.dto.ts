@@ -47,11 +47,12 @@ export const OFFER_TURNOVER_BASES = [
 
 // 'lifetime' (default) — maxClaimsPerUser counts a player's claims ever.
 // 'daily' — counts only today's claims, so maxClaimsPerUser=1 means "once
-// per calendar day" (e.g. a recurring daily lucky-envelope claim). 'monthly'
-// — counts only this calendar month's claims, so maxClaimsPerUser=1 means
-// "once per calendar month" (e.g. a loss-threshold envelope tied to
-// triggerConfig.monthlyPrincipalLoss — see OffersService.matchesConditions).
-export const OFFER_CLAIM_WINDOWS = ['lifetime', 'daily', 'monthly'] as const;
+// per calendar day" (e.g. a recurring daily lucky-envelope claim). 'weekly'/
+// 'monthly' — same idea, floored at this ISO week's Monday / this calendar
+// month's 1st, so maxClaimsPerUser=1 means "once per week/month" (e.g. a
+// loss-threshold envelope tied to triggerConfig.weeklyPrincipalLoss /
+// monthlyPrincipalLoss — see OffersService.matchesConditions).
+export const OFFER_CLAIM_WINDOWS = ['lifetime', 'daily', 'weekly', 'monthly'] as const;
 
 export class CreateOfferDto {
   @IsString()

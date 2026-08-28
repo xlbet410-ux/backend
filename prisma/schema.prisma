@@ -543,9 +543,9 @@ model Offer {
   // player's claims of this offer ever. 'daily' — counts only claims made
   // since the start of today, so e.g. maxClaimsPerUser=1 + claimWindow=
   // 'daily' means "once per calendar day," for a recurring daily-claim
-  // offer like a lucky-envelope drop. 'monthly' — same idea, floored at the
-  // start of the current calendar month instead. See
-  // OffersService.matchesConditions.
+  // offer like a lucky-envelope drop. 'weekly'/'monthly' — same idea,
+  // floored at this ISO week's Monday / the start of the current calendar
+  // month instead. See OffersService.matchesConditions.
   claimWindow String @default("lifetime") @map("claim_window") @db.VarChar(20)
 
   startsAt DateTime? @map("starts_at") @db.Timestamptz

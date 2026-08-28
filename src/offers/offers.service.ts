@@ -17,8 +17,8 @@ import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
 import { NotificationService } from '../notification/notification.service';
 import { BalanceService } from '../balance/balance.service';
-import { startOfUTCMonth } from '../common/date.util';
-import { computeMonthlyPrincipalLoss } from '../common/principal-loss.util';
+import { startOfUTCMonth, startOfUTCWeek } from '../common/date.util';
+import { computePrincipalLossSince } from '../common/principal-loss.util';
 
 const UPLOAD_DIR = join(process.cwd(), 'uploads', 'offers');
 const ALLOWED_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
@@ -31,6 +31,12 @@ const MAX_DIMENSION = 1600;
 // occurrence — matches GamesService's established periodic-refresh pattern
 // elsewhere in this codebase (no new scheduler dependency needed).
 const RECURRING_OFFER_REFRESH_MS = 30 * 60 * 1000;
+// How often to check for players who just became eligible for a
+// principal-loss-gated manual_claim offer (see resolvePrincipalLossConfig)
+// and haven't been told yet — matches CashbackService's 15-minute sweep
+// cadence, cheap to re-check often since the per-player notification-
+// already-sent check makes every tick a no-op once someone's been notified.
+const CLAIMABLE_OFFER_NOTIFICATION_SWEEP_MS = 15 * 60 * 1000;
 
 type TriggerBase = { userId: bigint };
 type OfferTrigger =
@@ -52,6 +58,7 @@ type OfferTrigger =
 export class OffersService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(OffersService.name);
   private recurringOfferTimer: ReturnType<typeof setInterval> | null = null;
+  private claimableOfferNotificationTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -64,10 +71,16 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
     this.recurringOfferTimer = setInterval(() => {
       void this.refreshRecurringOffers();
     }, RECURRING_OFFER_REFRESH_MS);
+
+    void this.runClaimableOfferNotificationSweep();
+    this.claimableOfferNotificationTimer = setInterval(() => {
+      void this.runClaimableOfferNotificationSweep();
+    }, CLAIMABLE_OFFER_NOTIFICATION_SWEEP_MS);
   }
 
   onModuleDestroy(): void {
     if (this.recurringOfferTimer) clearInterval(this.recurringOfferTimer);
+    if (this.claimableOfferNotificationTimer) clearInterval(this.claimableOfferNotificationTimer);
   }
 
   // Rolls startsAt/endsAt forward for any offer with recurringMonthDays set
@@ -572,22 +585,19 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
             user.agentTier >= offer.requiredAgentTier)
         : true;
 
-      // Same monthlyPrincipalLoss opt-in as matchesConditions (see there for
-      // why only bonus-free bets count as principal) — checked here too so
-      // the card shows as not-yet-eligible ("come back later") instead of
-      // looking tappable and only failing with an error once the player
-      // actually taps it. Only runs the extra query for offers that opt in.
+      // Same monthly/weeklyPrincipalLoss opt-in as matchesConditions (see
+      // there for why only bonus-free bets count as principal) — checked
+      // here too so the card shows as not-yet-eligible ("come back later")
+      // instead of looking tappable and only failing with an error once
+      // the player actually taps it. Only runs the extra query for offers
+      // that opt in.
       if (eligible && user) {
-        const lossCfg = (
-          offer.triggerConfig as {
-            monthlyPrincipalLoss?: { gameUid?: string; threshold?: number };
-          } | null
-        )?.monthlyPrincipalLoss;
-        if (lossCfg?.gameUid && lossCfg.threshold) {
-          const netLoss = await computeMonthlyPrincipalLoss(
+        const lossCfg = this.resolvePrincipalLossConfig(offer.triggerConfig);
+        if (lossCfg) {
+          const netLoss = await computePrincipalLossSince(
             this.prisma,
             user.id,
-            this.startOfCurrentMonth(),
+            lossCfg.since,
             lossCfg.gameUid,
           );
           eligible = netLoss.greaterThanOrEqualTo(lossCfg.threshold);
@@ -881,16 +891,159 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
     return startOfUTCMonth(new Date());
   }
 
-  // 'daily' floors at today; 'monthly' floors at the 1st of this calendar
-  // month (so maxClaimsPerUser=1 + claimWindow='monthly' means "once per
-  // calendar month" — e.g. a loss-threshold envelope that can fire again
-  // once next month's losses cross the threshold); 'lifetime' (default,
-  // and anything unrecognized) has no floor — every claim ever counts,
-  // unchanged from the original behavior.
+  // Same idea as startOfCurrentMonth, one calendar (ISO, Monday-start) week
+  // instead of a month.
+  private startOfCurrentWeek(): Date {
+    return startOfUTCWeek(new Date());
+  }
+
+  // 'daily' floors at today; 'weekly' floors at this ISO week's Monday;
+  // 'monthly' floors at the 1st of this calendar month (so
+  // maxClaimsPerUser=1 + claimWindow='monthly'/'weekly' means "once per
+  // calendar month/week" — e.g. a loss-threshold envelope that can fire
+  // again once next period's losses cross the threshold); 'lifetime'
+  // (default, and anything unrecognized) has no floor — every claim ever
+  // counts, unchanged from the original behavior.
   private claimWindowStart(claimWindow: string): Date | null {
     if (claimWindow === 'daily') return this.startOfToday();
+    if (claimWindow === 'weekly') return this.startOfCurrentWeek();
     if (claimWindow === 'monthly') return this.startOfCurrentMonth();
     return null;
+  }
+
+  // Reads triggerConfig for either a monthlyPrincipalLoss or
+  // weeklyPrincipalLoss opt-in (see the Offer.triggerConfig comment) and
+  // resolves it to the (gameUid, threshold, period-start) to actually check
+  // against — a single shared place for all three call sites (listForUser's
+  // pre-check, matchesConditions' claim-time gate, applyOffer's reward
+  // basis) instead of each re-parsing triggerConfig and picking a period
+  // start independently. If an offer somehow sets both, monthly wins
+  // (arbitrary but deterministic) — the CRM form only ever sets one.
+  private resolvePrincipalLossConfig(
+    triggerConfig: Prisma.JsonValue | null,
+  ): { gameUid: string; threshold: number; since: Date } | null {
+    const cfg = triggerConfig as {
+      monthlyPrincipalLoss?: { gameUid?: string; threshold?: number };
+      weeklyPrincipalLoss?: { gameUid?: string; threshold?: number };
+    } | null;
+    const monthly = cfg?.monthlyPrincipalLoss;
+    if (monthly?.gameUid && monthly.threshold) {
+      return {
+        gameUid: monthly.gameUid,
+        threshold: monthly.threshold,
+        since: this.startOfCurrentMonth(),
+      };
+    }
+    const weekly = cfg?.weeklyPrincipalLoss;
+    if (weekly?.gameUid && weekly.threshold) {
+      return {
+        gameUid: weekly.gameUid,
+        threshold: weekly.threshold,
+        since: this.startOfCurrentWeek(),
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Notifies any player who's just become newly eligible for a principal-
+   * loss-gated manual_claim offer (e.g. "lose ৳5000+ this week, get a red
+   * envelope") — they'd otherwise only find out by happening to revisit the
+   * Promotions page. Idempotent per (player, offer, period) via the
+   * existing-notification check inside notifyEligiblePlayers, so a
+   * redundant tick while someone remains eligible just no-ops instead of
+   * notifying them again every 15 minutes.
+   */
+  async runClaimableOfferNotificationSweep(): Promise<{ notified: number }> {
+    let notified = 0;
+    try {
+      const offers = await this.prisma.offer.findMany({
+        where: { isActive: true, triggerType: 'manual_claim' },
+      });
+
+      for (const offer of offers) {
+        const lossCfg = this.resolvePrincipalLossConfig(offer.triggerConfig);
+        if (!lossCfg) continue;
+
+        try {
+          notified += await this.notifyEligiblePlayers(offer, lossCfg);
+        } catch (err) {
+          this.logger.error(
+            `Claimable-offer notification sweep failed for offer ${offer.id}: ${(err as Error).message}`,
+          );
+        }
+      }
+    } catch (err) {
+      this.logger.error(
+        `Claimable-offer notification sweep query failed: ${(err as Error).message}`,
+      );
+      return { notified: 0 };
+    }
+
+    if (notified > 0) {
+      this.logger.log(`Claimable-offer notification sweep: notified ${notified} player(s).`);
+    }
+    return { notified };
+  }
+
+  private async notifyEligiblePlayers(
+    offer: Awaited<ReturnType<typeof this.prisma.offer.findFirst>> & object,
+    lossCfg: { gameUid: string; threshold: number; since: Date },
+  ): Promise<number> {
+    // Only players who actually played this game since the period started
+    // are worth checking — same "groupBy first, then per-player" shape as
+    // CashbackService.runDailySweep / ReferralService.
+    // runMonthlyLossCommissionSweep.
+    const rows = await this.prisma.gameTransaction.groupBy({
+      by: ['userId'],
+      where: { gameUid: lossCfg.gameUid, createdAt: { gte: lossCfg.since } },
+    });
+    if (!rows.length) return 0;
+
+    let notified = 0;
+    for (const row of rows) {
+      try {
+        const netLoss = await computePrincipalLossSince(
+          this.prisma,
+          row.userId,
+          lossCfg.since,
+          lossCfg.gameUid,
+        );
+        if (netLoss.lessThan(lossCfg.threshold)) continue;
+
+        // Already claimed this period — nothing left to notify them about.
+        const claims = await this.prisma.offerClaim.count({
+          where: this.claimCountWhere(offer.id, row.userId, offer.claimWindow),
+        });
+        if (claims >= offer.maxClaimsPerUser) continue;
+
+        // Already notified this period — this is what stops a player who
+        // stays eligible from getting a fresh notification every 15
+        // minutes until they claim or the period rolls over.
+        const alreadyNotified = await this.prisma.notification.findFirst({
+          where: {
+            userId: row.userId,
+            type: 'offer_claimable',
+            createdAt: { gte: lossCfg.since },
+            metadata: { path: ['offerId'], equals: offer.id.toString() },
+          },
+        });
+        if (alreadyNotified) continue;
+
+        await this.notificationService.create(row.userId, 'offer_claimable', {
+          offerId: offer.id.toString(),
+          offerSlug: offer.slug,
+          titleBn: offer.titleBn,
+          titleEn: offer.titleEn,
+        });
+        notified++;
+      } catch (err) {
+        this.logger.error(
+          `Claimable-offer notification failed for user ${row.userId}, offer ${offer.id}: ${(err as Error).message}`,
+        );
+      }
+    }
+    return notified;
   }
 
   private claimCountWhere(
@@ -912,7 +1065,10 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
   ): Promise<Map<string, number>> {
     const byWindow = new Map<string, bigint[]>();
     for (const offer of offers) {
-      const key = offer.claimWindow === 'daily' || offer.claimWindow === 'monthly' ? offer.claimWindow : 'lifetime';
+      const key =
+        offer.claimWindow === 'daily' || offer.claimWindow === 'weekly' || offer.claimWindow === 'monthly'
+          ? offer.claimWindow
+          : 'lifetime';
       const ids = byWindow.get(key) ?? [];
       ids.push(offer.id);
       byWindow.set(key, ids);
@@ -1011,22 +1167,19 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
         return false;
     }
 
-    // Opt-in via triggerConfig — e.g. a 9Wicket "lose ৳5000+ this month,
-    // get a red envelope" offer: { gameUid: '9wicket-lobby', threshold: 5000 }.
+    // Opt-in via triggerConfig — e.g. a 9Wicket "lose ৳5000+ this week/
+    // month, get a red envelope" offer: monthlyPrincipalLoss or
+    // weeklyPrincipalLoss: { gameUid: '9wicket-lobby', threshold: 5000 }.
     // Independent of trigger.type (only manual_claim offers realistically
     // use it, since a player has to tap to claim), so this never fires for
     // an offer that doesn't set it — existing offers (including the plain
     // daily red envelope) are completely unaffected.
-    const lossCfg = (
-      offer.triggerConfig as {
-        monthlyPrincipalLoss?: { gameUid?: string; threshold?: number };
-      } | null
-    )?.monthlyPrincipalLoss;
-    if (lossCfg?.gameUid && lossCfg.threshold) {
-      const netLoss = await computeMonthlyPrincipalLoss(
+    const lossCfg = this.resolvePrincipalLossConfig(offer.triggerConfig);
+    if (lossCfg) {
+      const netLoss = await computePrincipalLossSince(
         this.prisma,
         trigger.userId,
-        this.startOfCurrentMonth(),
+        lossCfg.since,
         lossCfg.gameUid,
       );
       if (netLoss.lessThan(lossCfg.threshold)) return false;
@@ -1041,22 +1194,18 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
   ) {
     let amount = 'amount' in trigger ? trigger.amount : undefined;
 
-    // A monthlyPrincipalLoss-gated offer (see matchesConditions) has no
-    // natural `amount` from its trigger — manual_claim carries none at
+    // A monthly/weeklyPrincipalLoss-gated offer (see matchesConditions) has
+    // no natural `amount` from its trigger — manual_claim carries none at
     // all. For a percentage-type reward on this kind of offer, the reward
-    // basis IS that computed loss (e.g. "4% cashback on this month's net
+    // basis IS that computed loss (e.g. "4% cashback on this period's net
     // loss"), so recompute the same figure matchesConditions already
     // gated this claim on.
-    const lossCfg = (
-      offer.triggerConfig as {
-        monthlyPrincipalLoss?: { gameUid?: string; threshold?: number };
-      } | null
-    )?.monthlyPrincipalLoss;
-    if (lossCfg?.gameUid) {
-      amount = await computeMonthlyPrincipalLoss(
+    const lossCfg = this.resolvePrincipalLossConfig(offer.triggerConfig);
+    if (lossCfg) {
+      amount = await computePrincipalLossSince(
         this.prisma,
         trigger.userId,
-        this.startOfCurrentMonth(),
+        lossCfg.since,
         lossCfg.gameUid,
       );
     }

@@ -11,7 +11,7 @@ import { NotificationService } from '../notification/notification.service';
 import { BalanceService } from '../balance/balance.service';
 import { Prisma } from '../../generated/prisma/client';
 import { startOfUTCMonth } from '../common/date.util';
-import { computeMonthlyPrincipalLoss } from '../common/principal-loss.util';
+import { computePrincipalLossSince } from '../common/principal-loss.util';
 import {
   REFERRAL_MILESTONE_LEVEL,
   FRAUD_SAME_IP_WINDOW_MS,
@@ -640,7 +640,7 @@ export class ReferralService implements OnModuleInit, OnModuleDestroy {
     });
     if (!referral || referral.status === 'fraud_flagged') return false;
 
-    const netPrincipalLoss = await computeMonthlyPrincipalLoss(
+    const netPrincipalLoss = await computePrincipalLossSince(
       this.prisma,
       bettorUserId,
       calculationMonth,

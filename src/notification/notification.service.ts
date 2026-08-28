@@ -11,6 +11,7 @@ export type NotificationType =
   | 'vip_levelup'
   | 'daily_cashback'
   | 'offer_bonus'
+  | 'offer_claimable'
   | 'kyc_approved'
   | 'kyc_rejected'
   | 'deposit_approved'
