@@ -59,11 +59,13 @@ const FEATURED_LIMIT = 30;
 const NINE_WICKET_PROVIDER_CODE = '9W';
 const NINE_WICKET_GAME_UID = '9wicket-lobby';
 const NINE_WICKET_ACCOUNT_LENGTH = 6;
-// Oracle requires this launch "username" to be exactly 6 characters with no
-// special characters — incompatible with the 10-lowercase-letter
-// gameAccount used for every other provider, hence the separate column.
-const NINE_WICKET_ACCOUNT_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
-const NINE_WICKET_ACCOUNT_PATTERN = /^[a-z0-9]{6}$/;
+// Oracle requires this launch "username" to be exactly 6 lowercase letters —
+// no digits, uppercase, or symbols. Same constraint (and same fix) as
+// GAME_ACCOUNT_CHARS above: digits were rejected by Oracle, just at a
+// different length — incompatible with the 10-lowercase-letter gameAccount
+// used for every other provider, hence the separate column.
+const NINE_WICKET_ACCOUNT_CHARS = 'abcdefghijklmnopqrstuvwxyz';
+const NINE_WICKET_ACCOUNT_PATTERN = /^[a-z]{6}$/;
 
 type CallbackPayload = {
   game_uid: string;
@@ -174,6 +176,9 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     const user = await this.prisma.user.findUniqueOrThrow({
       where: { id: userId },
     });
+    // Self-heal: a stored account from before the digit-charset fix (see
+    // NINE_WICKET_ACCOUNT_CHARS) would never validate against Oracle, so
+    // don't trust it blindly — regenerate on this player's next launch.
     if (
       user.nineWicketAccount &&
       NINE_WICKET_ACCOUNT_PATTERN.test(user.nineWicketAccount)
