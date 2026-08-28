@@ -14,6 +14,8 @@ type UserWithDetails = {
   balance: unknown;
   isActive: boolean;
   vipLevel: number;
+  gameAccount: string | null;
+  nineWicketAccount: string | null;
   createdAt: Date;
   updatedAt: Date;
   kycVerification: { status: string } | null;
@@ -51,6 +53,12 @@ export class UsersService {
       balance: Number(u.balance),
       isActive: u.isActive,
       vipLevel: u.vipLevel,
+      // The auto-generated Oracle launch usernames (see GamesService.
+      // ensureGameAccount / ensureNineWicketAccount) — null until the
+      // player's first launch of that kind. Surfaced here for staff to
+      // reproduce/debug a launch issue directly against Oracle's API.
+      gameAccount: u.gameAccount,
+      nineWicketAccount: u.nineWicketAccount,
       kycStatus: u.kycVerification?.status ?? 'none',
       totalCashIn,
       totalCashOut,
