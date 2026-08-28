@@ -17,6 +17,7 @@ import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
 import { NotificationService } from '../notification/notification.service';
 import { BalanceService } from '../balance/balance.service';
+import { DEPOSIT_TURNOVER_TYPE } from '../bonus/bonus.service';
 
 const UPLOAD_DIR = join(process.cwd(), 'uploads', 'offers');
 const ALLOWED_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
@@ -551,50 +552,45 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
         })
       : null;
 
-    // Batched claim counts instead of one query per offer: split by
-    // claimWindow (the WHERE shape differs — 'daily' adds a claimedAt
-    // filter) and groupBy offerId within each, so this is 0-2 queries total
-    // for the whole list instead of one per offer.
-    const claimCountByOfferId = new Map<string, number>();
-    if (userId) {
-      const dailyIds: bigint[] = [];
-      const lifetimeIds: bigint[] = [];
-      for (const offer of offers) {
-        (offer.claimWindow === 'daily' ? dailyIds : lifetimeIds).push(offer.id);
-      }
-      const [dailyCounts, lifetimeCounts] = await Promise.all([
-        dailyIds.length
-          ? this.prisma.offerClaim.groupBy({
-              by: ['offerId'],
-              where: { userId, offerId: { in: dailyIds }, claimedAt: { gte: this.startOfToday() } },
-              _count: { _all: true },
-            })
-          : Promise.resolve([]),
-        lifetimeIds.length
-          ? this.prisma.offerClaim.groupBy({
-              by: ['offerId'],
-              where: { userId, offerId: { in: lifetimeIds } },
-              _count: { _all: true },
-            })
-          : Promise.resolve([]),
-      ]);
-      for (const row of [...dailyCounts, ...lifetimeCounts]) {
-        claimCountByOfferId.set(row.offerId.toString(), row._count._all);
-      }
-    }
+    // Batched claim counts instead of one query per offer (see
+    // batchedClaimCounts — split by claimWindow, groupBy offerId within each).
+    const claimCountByOfferId = userId
+      ? await this.batchedClaimCounts(userId, offers)
+      : new Map<string, number>();
 
     const result: Array<Record<string, unknown>> = [];
     for (const offer of offers) {
       const claims = claimCountByOfferId.get(offer.id.toString()) ?? 0;
       const alreadyClaimed = claims >= offer.maxClaimsPerUser;
 
-      const eligible = user
+      let eligible = user
         ? (!offer.requiresKyc || user.kycVerification?.status === 'verified') &&
           (!offer.requiredVipLevel ||
             user.vipLevel >= offer.requiredVipLevel) &&
           (!offer.requiredAgentTier ||
             user.agentTier >= offer.requiredAgentTier)
         : true;
+
+      // Same monthlyPrincipalLoss opt-in as matchesConditions (see there for
+      // why only bonus-free bets count as principal) — checked here too so
+      // the card shows as not-yet-eligible ("come back later") instead of
+      // looking tappable and only failing with an error once the player
+      // actually taps it. Only runs the extra query for offers that opt in.
+      if (eligible && user) {
+        const lossCfg = (
+          offer.triggerConfig as {
+            monthlyPrincipalLoss?: { gameUid?: string; threshold?: number };
+          } | null
+        )?.monthlyPrincipalLoss;
+        if (lossCfg?.gameUid && lossCfg.threshold) {
+          const netLoss = await this.computeMonthlyPrincipalLoss(
+            user.id,
+            lossCfg.gameUid,
+            this.startOfCurrentMonth(),
+          );
+          eligible = netLoss.greaterThanOrEqualTo(lossCfg.threshold);
+        }
+      }
 
       result.push({
         id: offer.id.toString(),
@@ -735,32 +731,11 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
       orderBy: { priority: 'desc' },
     });
 
-    // Batched instead of one offerClaim query per offer — same approach as
+    // Batched instead of one offerClaim query per offer — same helper as
     // listForUser (split by claimWindow, groupBy offerId).
-    const claimCountByOfferId = new Map<string, number>();
-    if (offers.length) {
-      const dailyIds = offers.filter((o) => o.claimWindow === 'daily').map((o) => o.id);
-      const lifetimeIds = offers.filter((o) => o.claimWindow !== 'daily').map((o) => o.id);
-      const [dailyCounts, lifetimeCounts] = await Promise.all([
-        dailyIds.length
-          ? this.prisma.offerClaim.groupBy({
-              by: ['offerId'],
-              where: { userId, offerId: { in: dailyIds }, claimedAt: { gte: this.startOfToday() } },
-              _count: { _all: true },
-            })
-          : Promise.resolve([]),
-        lifetimeIds.length
-          ? this.prisma.offerClaim.groupBy({
-              by: ['offerId'],
-              where: { userId, offerId: { in: lifetimeIds } },
-              _count: { _all: true },
-            })
-          : Promise.resolve([]),
-      ]);
-      for (const row of [...dailyCounts, ...lifetimeCounts]) {
-        claimCountByOfferId.set(row.offerId.toString(), row._count._all);
-      }
-    }
+    const claimCountByOfferId = offers.length
+      ? await this.batchedClaimCounts(userId, offers)
+      : new Map<string, number>();
     // Same value regardless of which offer is being checked — computed once
     // instead of re-querying inside the loop for every nth_deposit offer.
     let depositCount: number | null = null;
@@ -895,16 +870,69 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
     return d;
   }
 
-  // 'daily' claimWindow counts only today's claims (so maxClaimsPerUser=1
-  // means "once per calendar day"); 'lifetime' (default) counts every claim
-  // ever, unchanged from the original behavior.
+  // Calendar-month start, not a rolling 30 days — matches startOfToday's
+  // calendar-day (not rolling-24h) convention. A user who loses less than
+  // the threshold this month simply doesn't reach it; the shortfall never
+  // carries into next month, since next month's window starts counting
+  // from this same fresh boundary.
+  private startOfCurrentMonth(): Date {
+    const d = new Date();
+    d.setDate(1);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+
+  // 'daily' floors at today; 'monthly' floors at the 1st of this calendar
+  // month (so maxClaimsPerUser=1 + claimWindow='monthly' means "once per
+  // calendar month" — e.g. a loss-threshold envelope that can fire again
+  // once next month's losses cross the threshold); 'lifetime' (default,
+  // and anything unrecognized) has no floor — every claim ever counts,
+  // unchanged from the original behavior.
+  private claimWindowStart(claimWindow: string): Date | null {
+    if (claimWindow === 'daily') return this.startOfToday();
+    if (claimWindow === 'monthly') return this.startOfCurrentMonth();
+    return null;
+  }
+
   private claimCountWhere(
     offerId: bigint,
     userId: bigint,
     claimWindow: string,
   ): Prisma.OfferClaimWhereInput {
-    if (claimWindow !== 'daily') return { offerId, userId };
-    return { offerId, userId, claimedAt: { gte: this.startOfToday() } };
+    const start = this.claimWindowStart(claimWindow);
+    return start ? { offerId, userId, claimedAt: { gte: start } } : { offerId, userId };
+  }
+
+  // Batched claim counts for a list of offers, split by claimWindow (same
+  // idea as the old daily/lifetime-only split, generalized to also cover
+  // 'monthly') — one groupBy per distinct window instead of one query per
+  // offer. Used by both listForUser and getApplicableDepositOffers.
+  private async batchedClaimCounts(
+    userId: bigint,
+    offers: Array<{ id: bigint; claimWindow: string }>,
+  ): Promise<Map<string, number>> {
+    const byWindow = new Map<string, bigint[]>();
+    for (const offer of offers) {
+      const key = offer.claimWindow === 'daily' || offer.claimWindow === 'monthly' ? offer.claimWindow : 'lifetime';
+      const ids = byWindow.get(key) ?? [];
+      ids.push(offer.id);
+      byWindow.set(key, ids);
+    }
+
+    const result = new Map<string, number>();
+    await Promise.all(
+      [...byWindow.entries()].map(async ([window, ids]) => {
+        if (!ids.length) return;
+        const start = this.claimWindowStart(window);
+        const rows = await this.prisma.offerClaim.groupBy({
+          by: ['offerId'],
+          where: { userId, offerId: { in: ids }, ...(start ? { claimedAt: { gte: start } } : {}) },
+          _count: { _all: true },
+        });
+        for (const row of rows) result.set(row.offerId.toString(), row._count._all);
+      }),
+    );
+    return result;
   }
 
   // Today's cumulative claim count + amount distributed for an offer with a
@@ -984,7 +1012,71 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
         return false;
     }
 
+    // Opt-in via triggerConfig — e.g. a 9Wicket "lose ৳5000+ this month,
+    // get a red envelope" offer: { gameUid: '9wicket-lobby', threshold: 5000 }.
+    // Independent of trigger.type (only manual_claim offers realistically
+    // use it, since a player has to tap to claim), so this never fires for
+    // an offer that doesn't set it — existing offers (including the plain
+    // daily red envelope) are completely unaffected.
+    const lossCfg = (
+      offer.triggerConfig as {
+        monthlyPrincipalLoss?: { gameUid?: string; threshold?: number };
+      } | null
+    )?.monthlyPrincipalLoss;
+    if (lossCfg?.gameUid && lossCfg.threshold) {
+      const netLoss = await this.computeMonthlyPrincipalLoss(
+        trigger.userId,
+        lossCfg.gameUid,
+        this.startOfCurrentMonth(),
+      );
+      if (netLoss.lessThan(lossCfg.threshold)) return false;
+    }
+
     return true;
+  }
+
+  // Net loss (bets minus wins) on one game, since `monthStart`, counting
+  // only bets placed with the player's own principal — not offer/bonus
+  // money. There's no per-bet ledger of which pool funded a given stake
+  // (every bonus type is credited straight into the single pooled
+  // `user.balance` — see BonusService.processTurnover's docstring), so a
+  // bet can only be *provably* principal-funded when no bonus was active
+  // at all at that moment: with nothing else in the balance, the whole
+  // balance was principal by construction (same accounting the wallet
+  // page's own Main Wallet vs Turnover Wallet split already relies on —
+  // see BonusService.getWalletSummary). Deposit-turnover entries don't
+  // count as "a bonus was active" here, matching that same precedent: a
+  // deposit's own 1x turnover requirement never hides the deposit itself
+  // from Main Wallet, so it shouldn't disqualify a bet from being principal
+  // either. Any bet placed while a real bonus WAS active is excluded
+  // entirely (not partially counted) rather than guessed at.
+  private async computeMonthlyPrincipalLoss(
+    userId: bigint,
+    gameUid: string,
+    monthStart: Date,
+  ): Promise<Prisma.Decimal> {
+    const [transactions, bonusWallets] = await Promise.all([
+      this.prisma.gameTransaction.findMany({
+        where: { userId, gameUid, createdAt: { gte: monthStart } },
+        select: { betAmount: true, winAmount: true, createdAt: true },
+      }),
+      this.prisma.bonusWallet.findMany({
+        where: { userId, type: { not: DEPOSIT_TURNOVER_TYPE } },
+        select: { claimedAt: true, completedAt: true },
+      }),
+    ]);
+
+    const isPrincipalFunded = (at: Date) =>
+      !bonusWallets.some(
+        (b) => b.claimedAt <= at && (!b.completedAt || b.completedAt > at),
+      );
+
+    let net = new Prisma.Decimal(0);
+    for (const tx of transactions) {
+      if (!isPrincipalFunded(tx.createdAt)) continue;
+      net = net.add(tx.betAmount).sub(tx.winAmount);
+    }
+    return net;
   }
 
   private async applyOffer(

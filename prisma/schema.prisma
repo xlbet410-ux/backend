@@ -471,7 +471,11 @@ model Offer {
   // 'first_deposit' | 'nth_deposit' | 'every_deposit' | 'kyc_approved' |
   // 'vip_levelup' | 'referral_milestone' | 'daily_login' | 'signup' | 'manual_claim'
   triggerType   String @map("trigger_type") @db.VarChar(50)
-  // Trigger-specific extra config, e.g. { "nth": 2 } for nth_deposit.
+  // Trigger-specific extra config, e.g. { "nth": 2 } for nth_deposit, or
+  // { "monthlyPrincipalLoss": { "gameUid": "9wicket-lobby", "threshold": 5000 } }
+  // on a manual_claim offer to additionally require that much net principal
+  // loss (not offer/bonus money) on that game this calendar month — see
+  // OffersService.matchesConditions / computeMonthlyPrincipalLoss.
   triggerConfig Json?  @map("trigger_config")
 
   minDeposit        Decimal? @map("min_deposit") @db.Decimal(14, 2)
@@ -536,7 +540,9 @@ model Offer {
   // player's claims of this offer ever. 'daily' — counts only claims made
   // since the start of today, so e.g. maxClaimsPerUser=1 + claimWindow=
   // 'daily' means "once per calendar day," for a recurring daily-claim
-  // offer like a lucky-envelope drop. See OffersService.matchesConditions.
+  // offer like a lucky-envelope drop. 'monthly' — same idea, floored at the
+  // start of the current calendar month instead. See
+  // OffersService.matchesConditions.
   claimWindow String @default("lifetime") @map("claim_window") @db.VarChar(20)
 
   startsAt DateTime? @map("starts_at") @db.Timestamptz

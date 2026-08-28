@@ -986,6 +986,20 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
           );
         }
 
+        // Oracle's own game_uid on a 9Wicket callback is per-match/round,
+        // not the synthetic "9wicket-lobby" id buildCatalog uses — storing
+        // it as-is would silently break bonus-turnover category lookups,
+        // game-history display, and any per-provider loss reporting for
+        // these bets (the catalog only ever has one entry, under the
+        // synthetic id). member_account matching this user's dedicated
+        // nineWicketAccount (never gameAccount, see launchNineWicket) is
+        // exactly when a callback is settling a 9Wicket bet — normalize to
+        // the same canonical id the catalog/launch path already uses.
+        const resolvedGameUid =
+          user.nineWicketAccount && member_account === user.nineWicketAccount
+            ? NINE_WICKET_GAME_UID
+            : game_uid;
+
         const newBalance =
           Number(user.balance) -
           Number(bet_amount || 0) +
@@ -1002,7 +1016,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
         const gameTransaction = await tx.gameTransaction.create({
           data: {
             userId: user.id,
-            gameUid: game_uid,
+            gameUid: resolvedGameUid,
             gameRound: game_round,
             serialNumber: serial_number,
             betAmount: bet_amount || 0,
@@ -1011,7 +1025,12 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
             balanceAfter: newBalance,
           },
         });
-        return { newBalance, userId: user.id, gameTransactionId: gameTransaction.id };
+        return {
+          newBalance,
+          userId: user.id,
+          gameTransactionId: gameTransaction.id,
+          gameUid: resolvedGameUid,
+        };
       });
 
       // Instant wallet update in the bet app — this is a server-to-server
@@ -1031,11 +1050,11 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
           // the same in-memory cache every other catalog lookup uses — no
           // extra Oracle round-trip per bet.
           const catalog = await this.ensureCatalog();
-          const category = catalog.find((g) => g.gameUid === game_uid)?.category ?? null;
+          const category = catalog.find((g) => g.gameUid === result.gameUid)?.category ?? null;
           await this.bonusService.processTurnover(
             result.userId,
             new Prisma.Decimal(bet_amount),
-            game_uid,
+            result.gameUid,
             category,
           );
         } catch (err) {
