@@ -1,20 +1,30 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { VipService } from '../vip/vip.service';
 import { OffersService } from '../offers/offers.service';
 import { NotificationService } from '../notification/notification.service';
 import { BalanceService } from '../balance/balance.service';
 import { Prisma } from '../../generated/prisma/client';
+import { startOfUTCMonth } from '../common/date.util';
+import { computeMonthlyPrincipalLoss } from '../common/principal-loss.util';
 import {
   REFERRAL_MILESTONE_LEVEL,
   FRAUD_SAME_IP_WINDOW_MS,
   FRAUD_RAPID_VELOCITY_WINDOW_MS,
   FRAUD_RAPID_VELOCITY_THRESHOLD,
+  REFERRAL_LOSS_COMMISSION_SWEEP_CHECK_INTERVAL_MS,
 } from './referral-constants';
 
 @Injectable()
-export class ReferralService {
+export class ReferralService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ReferralService.name);
+  private lossCommissionSweepTimer: ReturnType<typeof setInterval> | null =
+    null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -23,6 +33,17 @@ export class ReferralService {
     private readonly notificationService: NotificationService,
     private readonly balanceService: BalanceService,
   ) {}
+
+  onModuleInit(): void {
+    void this.runMonthlyLossCommissionSweep();
+    this.lossCommissionSweepTimer = setInterval(() => {
+      void this.runMonthlyLossCommissionSweep();
+    }, REFERRAL_LOSS_COMMISSION_SWEEP_CHECK_INTERVAL_MS);
+  }
+
+  onModuleDestroy(): void {
+    if (this.lossCommissionSweepTimer) clearInterval(this.lossCommissionSweepTimer);
+  }
 
   /**
    * Resolves the code a new user entered at signup against a real
@@ -542,6 +563,212 @@ export class ReferralService {
         referredMemberId: c.referred.memberId,
         type: c.type,
         betAmount: c.betAmount.toString(),
+        commissionRate: c.commissionRate.toString(),
+        commissionAmount: c.commissionAmount.toString(),
+        createdAt: c.createdAt.toISOString(),
+      })),
+    };
+  }
+
+  /**
+   * Grants last calendar month's loss commission to every referred player's
+   * upline. Idempotent per (referrer, originating bettor, tier, month) —
+   * see ReferralLossCommission's unique constraint — safe to call
+   * repeatedly, which is exactly what the periodic timer above does
+   * instead of a real once-a-month cron (no @nestjs/schedule dependency in
+   * this codebase, same reasoning as CashbackService's daily sweep).
+   */
+  async runMonthlyLossCommissionSweep(): Promise<{ processed: number }> {
+    const thisMonthStart = startOfUTCMonth(new Date());
+    const lastMonthStart = new Date(
+      Date.UTC(thisMonthStart.getUTCFullYear(), thisMonthStart.getUTCMonth() - 1, 1),
+    );
+    let processed = 0;
+
+    try {
+      // Only bettors who actually played last month are worth walking the
+      // referral chain for — same "groupBy first, then per-user" shape as
+      // CashbackService.runDailySweep.
+      const rows = await this.prisma.gameTransaction.groupBy({
+        by: ['userId'],
+        where: { createdAt: { gte: lastMonthStart, lt: thisMonthStart } },
+      });
+
+      for (const row of rows) {
+        try {
+          const granted = await this.grantMonthlyLossCommission(
+            row.userId,
+            lastMonthStart,
+          );
+          if (granted) processed++;
+        } catch (err) {
+          this.logger.error(
+            `Monthly loss commission failed for bettor ${row.userId}: ${(err as Error).message}`,
+          );
+        }
+      }
+    } catch (err) {
+      this.logger.error(
+        `Monthly loss commission sweep query failed: ${(err as Error).message}`,
+      );
+      return { processed: 0 };
+    }
+
+    if (processed > 0) {
+      this.logger.log(
+        `Monthly loss commission sweep: paid upline for ${processed} bettor(s) for ${lastMonthStart.toISOString().slice(0, 7)}`,
+      );
+    }
+    return { processed };
+  }
+
+  /**
+   * Pays `bettorUserId`'s referral upline (up to 3 tiers) a % of their net
+   * PRINCIPAL loss for `calculationMonth` — same upline-chain-walk shape
+   * and the same tier1/2/3 VIP-level rates as recordBetCommission, but
+   * computed once for the whole month from net loss instead of per-bet
+   * from raw stake. The SAME netPrincipalLoss figure is reused unchanged
+   * at every tier (mirrors recordBetCommission reusing the same betAmount
+   * at every tier, rather than each intermediate referrer's own result).
+   */
+  private async grantMonthlyLossCommission(
+    bettorUserId: bigint,
+    calculationMonth: Date,
+  ): Promise<boolean> {
+    const referral = await this.prisma.referral.findUnique({
+      where: { referredId: bettorUserId },
+    });
+    if (!referral || referral.status === 'fraud_flagged') return false;
+
+    const netPrincipalLoss = await computeMonthlyPrincipalLoss(
+      this.prisma,
+      bettorUserId,
+      calculationMonth,
+    );
+    if (netPrincipalLoss.lessThanOrEqualTo(0)) return false;
+
+    const tierRates: Record<
+      'loss_tier1' | 'loss_tier2' | 'loss_tier3',
+      (tier: NonNullable<Awaited<ReturnType<VipService['getTierRow']>>>) => Prisma.Decimal
+    > = {
+      loss_tier1: (tier) => tier.referralBetCommissionPct,
+      loss_tier2: (tier) => tier.referralBetCommissionPctTier2,
+      loss_tier3: (tier) => tier.referralBetCommissionPctTier3,
+    };
+
+    let referredId = bettorUserId;
+    let upline: { id: bigint; referralId: bigint } | null = {
+      id: referral.referrerId,
+      referralId: referral.id,
+    };
+    let anyGranted = false;
+
+    for (const type of ['loss_tier1', 'loss_tier2', 'loss_tier3'] as const) {
+      if (!upline) break;
+      const currentReferralId = upline.referralId;
+      const referrer = await this.prisma.user.findUnique({
+        where: { id: upline.id },
+      });
+      // Defensive: a malformed/looped chain must never pay the same person
+      // twice for one month.
+      if (!referrer || !referrer.referralEnabled || referrer.id === referredId) break;
+
+      const tier = await this.vipService.getTierRow(referrer.vipLevel);
+      const rate = tier ? tierRates[type](tier) : new Prisma.Decimal(0);
+      if (tier && rate.greaterThan(0)) {
+        const commissionAmount = netPrincipalLoss.mul(rate);
+        if (commissionAmount.greaterThan(0)) {
+          try {
+            await this.prisma.$transaction(async (tx) => {
+              await tx.user.update({
+                where: { id: referrer.id },
+                data: {
+                  balance: { increment: commissionAmount },
+                  lifetimeCommissionEarned: { increment: commissionAmount },
+                },
+              });
+              // If this exact (referrer, sourceBettor, type, month)
+              // combination was already paid — a retried/concurrent sweep
+              // tick — this throws P2002 and rolls back the balance
+              // increment above too (same transaction), instead of paying
+              // twice.
+              await tx.referralLossCommission.create({
+                data: {
+                  referrerId: referrer.id,
+                  referredId,
+                  sourceBettorId: bettorUserId,
+                  referralId: currentReferralId,
+                  type,
+                  calculationMonth,
+                  netPrincipalLoss,
+                  commissionRate: rate,
+                  commissionAmount,
+                  referrerVipLevelAtEvent: referrer.vipLevel,
+                },
+              });
+            });
+            this.balanceService.notifyChanged(referrer.id);
+            anyGranted = true;
+          } catch (err) {
+            if (
+              !(
+                err instanceof Prisma.PrismaClientKnownRequestError &&
+                err.code === 'P2002'
+              )
+            ) {
+              throw err;
+            }
+            this.logger.log(
+              `${type} loss commission for bettor ${bettorUserId}, ${calculationMonth.toISOString().slice(0, 7)} already recorded — skipped duplicate.`,
+            );
+          }
+        }
+      }
+
+      // Walk up one more level: is THIS referrer themselves someone's
+      // referred user?
+      referredId = referrer.id;
+      const nextReferral = await this.prisma.referral.findUnique({
+        where: { referredId: referrer.id },
+      });
+      upline =
+        nextReferral && nextReferral.status !== 'fraud_flagged'
+          ? { id: nextReferral.referrerId, referralId: nextReferral.id }
+          : null;
+    }
+
+    return anyGranted;
+  }
+
+  async adminGetLossCommissions(referrerId?: bigint, page = 1, pageSize = 30) {
+    const where = referrerId ? { referrerId } : {};
+    const [rows, total] = await Promise.all([
+      this.prisma.referralLossCommission.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * Math.min(pageSize, 100),
+        take: Math.min(pageSize, 100),
+        include: {
+          referrer: { select: { fullName: true, memberId: true } },
+          referred: { select: { fullName: true, memberId: true } },
+          sourceBettor: { select: { fullName: true, memberId: true } },
+        },
+      }),
+      this.prisma.referralLossCommission.count({ where }),
+    ]);
+    return {
+      total,
+      commissions: rows.map((c) => ({
+        id: c.id.toString(),
+        referrerName: c.referrer.fullName,
+        referrerMemberId: c.referrer.memberId,
+        referredName: c.referred.fullName,
+        referredMemberId: c.referred.memberId,
+        sourceBettorName: c.sourceBettor.fullName,
+        sourceBettorMemberId: c.sourceBettor.memberId,
+        type: c.type,
+        calculationMonth: c.calculationMonth.toISOString().slice(0, 7),
+        netPrincipalLoss: c.netPrincipalLoss.toString(),
         commissionRate: c.commissionRate.toString(),
         commissionAmount: c.commissionAmount.toString(),
         createdAt: c.createdAt.toISOString(),

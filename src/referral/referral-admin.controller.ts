@@ -45,4 +45,20 @@ export class ReferralAdminController {
       pageSize ? Number(pageSize) : undefined,
     );
   }
+
+  // Monthly net-principal-loss commission — separate from the per-bet
+  // 'commissions' above (raw stake, instant) — see
+  // ReferralService.runMonthlyLossCommissionSweep.
+  @Get('loss-commissions')
+  lossCommissions(
+    @Query('referrerId') referrerId?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.referralService.adminGetLossCommissions(
+      referrerId ? BigInt(referrerId) : undefined,
+      page ? Number(page) : undefined,
+      pageSize ? Number(pageSize) : undefined,
+    );
+  }
 }

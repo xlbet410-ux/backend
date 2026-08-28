@@ -17,7 +17,8 @@ import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
 import { NotificationService } from '../notification/notification.service';
 import { BalanceService } from '../balance/balance.service';
-import { DEPOSIT_TURNOVER_TYPE } from '../bonus/bonus.service';
+import { startOfUTCMonth } from '../common/date.util';
+import { computeMonthlyPrincipalLoss } from '../common/principal-loss.util';
 
 const UPLOAD_DIR = join(process.cwd(), 'uploads', 'offers');
 const ALLOWED_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
@@ -583,10 +584,11 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
           } | null
         )?.monthlyPrincipalLoss;
         if (lossCfg?.gameUid && lossCfg.threshold) {
-          const netLoss = await this.computeMonthlyPrincipalLoss(
+          const netLoss = await computeMonthlyPrincipalLoss(
+            this.prisma,
             user.id,
-            lossCfg.gameUid,
             this.startOfCurrentMonth(),
+            lossCfg.gameUid,
           );
           eligible = netLoss.greaterThanOrEqualTo(lossCfg.threshold);
         }
@@ -870,16 +872,13 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
     return d;
   }
 
-  // Calendar-month start, not a rolling 30 days — matches startOfToday's
-  // calendar-day (not rolling-24h) convention. A user who loses less than
-  // the threshold this month simply doesn't reach it; the shortfall never
+  // Calendar-month start (UTC, matching every timestamptz column — see
+  // startOfUTCMonth), not a rolling 30 days. A user who loses less than the
+  // threshold this month simply doesn't reach it; the shortfall never
   // carries into next month, since next month's window starts counting
   // from this same fresh boundary.
   private startOfCurrentMonth(): Date {
-    const d = new Date();
-    d.setDate(1);
-    d.setHours(0, 0, 0, 0);
-    return d;
+    return startOfUTCMonth(new Date());
   }
 
   // 'daily' floors at today; 'monthly' floors at the 1st of this calendar
@@ -1024,59 +1023,16 @@ export class OffersService implements OnModuleInit, OnModuleDestroy {
       } | null
     )?.monthlyPrincipalLoss;
     if (lossCfg?.gameUid && lossCfg.threshold) {
-      const netLoss = await this.computeMonthlyPrincipalLoss(
+      const netLoss = await computeMonthlyPrincipalLoss(
+        this.prisma,
         trigger.userId,
-        lossCfg.gameUid,
         this.startOfCurrentMonth(),
+        lossCfg.gameUid,
       );
       if (netLoss.lessThan(lossCfg.threshold)) return false;
     }
 
     return true;
-  }
-
-  // Net loss (bets minus wins) on one game, since `monthStart`, counting
-  // only bets placed with the player's own principal — not offer/bonus
-  // money. There's no per-bet ledger of which pool funded a given stake
-  // (every bonus type is credited straight into the single pooled
-  // `user.balance` — see BonusService.processTurnover's docstring), so a
-  // bet can only be *provably* principal-funded when no bonus was active
-  // at all at that moment: with nothing else in the balance, the whole
-  // balance was principal by construction (same accounting the wallet
-  // page's own Main Wallet vs Turnover Wallet split already relies on —
-  // see BonusService.getWalletSummary). Deposit-turnover entries don't
-  // count as "a bonus was active" here, matching that same precedent: a
-  // deposit's own 1x turnover requirement never hides the deposit itself
-  // from Main Wallet, so it shouldn't disqualify a bet from being principal
-  // either. Any bet placed while a real bonus WAS active is excluded
-  // entirely (not partially counted) rather than guessed at.
-  private async computeMonthlyPrincipalLoss(
-    userId: bigint,
-    gameUid: string,
-    monthStart: Date,
-  ): Promise<Prisma.Decimal> {
-    const [transactions, bonusWallets] = await Promise.all([
-      this.prisma.gameTransaction.findMany({
-        where: { userId, gameUid, createdAt: { gte: monthStart } },
-        select: { betAmount: true, winAmount: true, createdAt: true },
-      }),
-      this.prisma.bonusWallet.findMany({
-        where: { userId, type: { not: DEPOSIT_TURNOVER_TYPE } },
-        select: { claimedAt: true, completedAt: true },
-      }),
-    ]);
-
-    const isPrincipalFunded = (at: Date) =>
-      !bonusWallets.some(
-        (b) => b.claimedAt <= at && (!b.completedAt || b.completedAt > at),
-      );
-
-    let net = new Prisma.Decimal(0);
-    for (const tx of transactions) {
-      if (!isPrincipalFunded(tx.createdAt)) continue;
-      net = net.add(tx.betAmount).sub(tx.winAmount);
-    }
-    return net;
   }
 
   private async applyOffer(

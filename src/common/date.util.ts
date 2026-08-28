@@ -7,3 +7,7 @@ export function startOfUTCDay(d: Date): Date {
 export function isSameUTCDay(a: Date, b: Date): boolean {
   return startOfUTCDay(a).getTime() === startOfUTCDay(b).getTime();
 }
+
+export function startOfUTCMonth(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+}

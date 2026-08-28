@@ -84,6 +84,9 @@ model User {
   referralAsReferred   Referral?            @relation("Referred")
   commissionsEarned    ReferralCommission[] @relation("CommissionReferrer")
   commissionsGenerated ReferralCommission[] @relation("CommissionReferred")
+  lossCommissionsEarned      ReferralLossCommission[] @relation("LossCommissionReferrer")
+  lossCommissionsGenerated   ReferralLossCommission[] @relation("LossCommissionReferred")
+  lossCommissionsAsBettor    ReferralLossCommission[] @relation("LossCommissionSourceBettor")
   cashbackGrants       CashbackGrant[]
   loginStreakLogs      LoginStreakLog[]
   notifications        Notification[]
@@ -753,6 +756,7 @@ model Referral {
   referred    User         @relation("Referred", fields: [referredId], references: [id])
   bonusWallet BonusWallet? @relation(fields: [bonusWalletId], references: [id])
   commissions ReferralCommission[]
+  lossCommissions ReferralLossCommission[]
 
   @@index([referrerId])
   @@index([status])
@@ -804,6 +808,64 @@ model ReferralCommission {
   @@unique([sourceGameTransactionId, type])
   @@unique([sourceCashTransactionId, type])
   @@map("referral_commissions")
+}
+
+// Monthly counterpart to ReferralCommission — that one pays a referrer a %
+// of every referred bet's raw stake, instantly, the moment it settles. This
+// one instead pays a % of the referred player's net PRINCIPAL loss (see
+// computeMonthlyPrincipalLoss — excludes any bet placed while a bonus was
+// active), aggregated over a full completed calendar month, via a periodic
+// sweep (see ReferralService.runMonthlyLossCommissionSweep) rather than
+// per-bet. Reuses the same tier1/2/3 VIP-level commission rates and the
+// same upline-chain-walk shape as recordBetCommission, just on a different
+// basis and cadence — see ReferralService.grantMonthlyLossCommission.
+model ReferralLossCommission {
+  id         BigInt @id @default(autoincrement())
+  referrerId BigInt @map("referrer_id")
+
+  // The immediate downline at this specific hop of the chain walk — the
+  // original bettor for loss_tier1, the loss_tier1 referrer for
+  // loss_tier2, and so on. Same convention as ReferralCommission.referredId.
+  referredId BigInt @map("referred_id")
+
+  // The ORIGINAL bettor whose monthly principal loss this row was
+  // calculated from — stays the same across all 3 tiers of one chain walk
+  // (mirrors betAmount being reused unchanged at every tier in
+  // recordBetCommission, rather than each referrer's own loss). Part of
+  // the uniqueness constraint below specifically so two different referred
+  // players sharing the same upline each generate their own independent
+  // tier2/tier3 payout instead of colliding on one.
+  sourceBettorId BigInt @map("source_bettor_id")
+
+  referralId BigInt @map("referral_id")
+
+  // 'loss_tier1' | 'loss_tier2' | 'loss_tier3'
+  type String @db.VarChar(20)
+
+  // First-of-month date this payout covers (the month the loss happened
+  // in, always a just-completed month by the time the sweep runs it).
+  calculationMonth DateTime @map("calculation_month") @db.Date
+
+  netPrincipalLoss Decimal @map("net_principal_loss") @db.Decimal(14, 2)
+  commissionRate   Decimal @map("commission_rate") @db.Decimal(6, 4)
+  commissionAmount Decimal @map("commission_amount") @db.Decimal(14, 2)
+
+  // Snapshot — the rate itself can change later if the referrer's VIP level changes.
+  referrerVipLevelAtEvent Int @map("referrer_vip_level_at_event")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  referrer     User     @relation("LossCommissionReferrer", fields: [referrerId], references: [id])
+  referred     User     @relation("LossCommissionReferred", fields: [referredId], references: [id])
+  sourceBettor User     @relation("LossCommissionSourceBettor", fields: [sourceBettorId], references: [id])
+  referral     Referral @relation(fields: [referralId], references: [id])
+
+  @@index([referrerId, calculationMonth])
+  // DB-enforced idempotency for the sweep, same role as ReferralCommission's
+  // [sourceGameTransactionId, type] constraint — one payout per (referrer,
+  // originating bettor, tier, month), safe to re-run/retry.
+  @@unique([referrerId, sourceBettorId, type, calculationMonth])
+  @@map("referral_loss_commissions")
 }
 
 // One row per user per calendar day — the unique constraint is what makes
