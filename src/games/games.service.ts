@@ -280,8 +280,7 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
   // the constant comment above launchGame. Bet settlement itself still goes
   // through the same shared handleCallback() as every other provider.
   private async launchNineWicket(id: bigint) {
-    const [user, nineWicketAccount, override] = await Promise.all([
-      this.prisma.user.findUniqueOrThrow({ where: { id } }),
+    const [nineWicketAccount, override] = await Promise.all([
       this.ensureNineWicketAccount(id),
       this.prisma.gameOverride.findUnique({
         where: { gameUid: NINE_WICKET_GAME_UID },
@@ -292,6 +291,21 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('This game is currently unavailable.');
     }
 
+    // 9Wicket is "transfer mode only" (see the constant comment above
+    // launchGame) — launching moves the player's WHOLE balance into
+    // 9Wicket's own wallet, not a per-bet wallet callback like every other
+    // provider. If a previous session ended without 9Wicket settling
+    // everything back through handleCallback (player just closed the tab,
+    // network hiccup, etc.), whatever's left sits stranded in 9Wicket's
+    // wallet forever unless it's pulled back first — this is exactly what
+    // the doc's separate "Withdraw Amount From 9wicket" endpoint
+    // (/ninewicket/getbalance) is for. Reconcile before reading the
+    // player's balance below, so this launch transfers the TRUE current
+    // total (any reclaimed leftover + whatever they've deposited since),
+    // not a stale, too-low figure.
+    await this.reconcileNineWicketBalance(id, nineWicketAccount);
+
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id } });
     const amount = Number(user.balance);
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new BadRequestException('Please deposit funds before playing.');
@@ -345,6 +359,56 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
       });
     }
     return { gameUrl };
+  }
+
+  // Pulls back whatever's currently sitting in this player's 9Wicket wallet
+  // and credits it to their real balance — see the doc's "Withdraw Amount
+  // From 9wicket" endpoint and the call site's comment in launchNineWicket
+  // for why this has to run before every launch. Never throws: a
+  // reconciliation failure must not block the player from launching the
+  // game — worst case their balance is momentarily stale, not lost (the
+  // leftover just waits in 9Wicket's wallet for the next successful
+  // reconciliation attempt instead).
+  private async reconcileNineWicketBalance(
+    userId: bigint,
+    nineWicketAccount: string,
+  ): Promise<void> {
+    type NineWicketBalanceResponse = {
+      transfer_status?: number;
+      get_amount?: number;
+    };
+    try {
+      const res = await fetch(`${this.baseUrl}/ninewicket/getbalance`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-oracle-key': this.apiKey,
+        },
+        body: JSON.stringify({ username: nineWicketAccount }),
+      });
+      const data = (await res
+        .json()
+        .catch(() => null)) as NineWicketBalanceResponse | null;
+
+      if (!res.ok || data?.transfer_status !== 1) return;
+      const amount = data.get_amount;
+      if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
+        return;
+      }
+
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { balance: { increment: amount } },
+      });
+      this.balanceService.notifyChanged(userId);
+      this.logger.log(
+        `Reconciled ৳${amount} back from 9Wicket for user ${userId}.`,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `9Wicket balance reconciliation failed for user ${userId}: ${(err as Error).message}`,
+      );
+    }
   }
 
   async getProviders() {
