@@ -599,7 +599,7 @@ model OfferClaim {
   claimedAt DateTime @default(now()) @map("claimed_at") @db.Timestamptz
 
   offer       Offer        @relation(fields: [offerId], references: [id])
-  user        User         @relation(fields: [userId], references: [id])
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   bonusWallet BonusWallet? @relation(fields: [bonusWalletId], references: [id])
 
   @@index([offerId, userId])
@@ -637,7 +637,7 @@ model BonusWallet {
   // count toward this specific bonus's turnover.
   eligibleGames Json? @map("eligible_games")
 
-  user       User        @relation(fields: [userId], references: [id])
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   offerClaim    OfferClaim?
   vipUpgradeLog VipUpgradeLog?
   referral      Referral?
@@ -717,7 +717,7 @@ model VipUpgradeLog {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  user        User         @relation(fields: [userId], references: [id])
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   tier        VipTier      @relation(fields: [toLevel], references: [level])
   bonusWallet BonusWallet? @relation(fields: [bonusWalletId], references: [id])
 
@@ -758,8 +758,8 @@ model Referral {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
 
-  referrer    User         @relation("Referrer", fields: [referrerId], references: [id])
-  referred    User         @relation("Referred", fields: [referredId], references: [id])
+  referrer    User         @relation("Referrer", fields: [referrerId], references: [id], onDelete: Cascade)
+  referred    User         @relation("Referred", fields: [referredId], references: [id], onDelete: Cascade)
   bonusWallet BonusWallet? @relation(fields: [bonusWalletId], references: [id])
   commissions ReferralCommission[]
   lossCommissions ReferralLossCommission[]
@@ -799,9 +799,9 @@ model ReferralCommission {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  referrer User     @relation("CommissionReferrer", fields: [referrerId], references: [id])
-  referred User     @relation("CommissionReferred", fields: [referredId], references: [id])
-  referral Referral @relation(fields: [referralId], references: [id])
+  referrer User     @relation("CommissionReferrer", fields: [referrerId], references: [id], onDelete: Cascade)
+  referred User     @relation("CommissionReferred", fields: [referredId], references: [id], onDelete: Cascade)
+  referral Referral @relation(fields: [referralId], references: [id], onDelete: Cascade)
 
   @@index([referrerId, createdAt])
   // DB-enforced double-payment guards, not just an app-level check — a
@@ -861,10 +861,10 @@ model ReferralLossCommission {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  referrer     User     @relation("LossCommissionReferrer", fields: [referrerId], references: [id])
-  referred     User     @relation("LossCommissionReferred", fields: [referredId], references: [id])
-  sourceBettor User     @relation("LossCommissionSourceBettor", fields: [sourceBettorId], references: [id])
-  referral     Referral @relation(fields: [referralId], references: [id])
+  referrer     User     @relation("LossCommissionReferrer", fields: [referrerId], references: [id], onDelete: Cascade)
+  referred     User     @relation("LossCommissionReferred", fields: [referredId], references: [id], onDelete: Cascade)
+  sourceBettor User     @relation("LossCommissionSourceBettor", fields: [sourceBettorId], references: [id], onDelete: Cascade)
+  referral     Referral @relation(fields: [referralId], references: [id], onDelete: Cascade)
 
   @@index([referrerId, calculationMonth])
   // DB-enforced idempotency for the sweep, same role as ReferralCommission's
@@ -896,7 +896,7 @@ model CashbackGrant {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  user        User         @relation(fields: [userId], references: [id])
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   bonusWallet BonusWallet? @relation(fields: [bonusWalletId], references: [id])
 
   @@unique([userId, calculationDate])
@@ -917,7 +917,7 @@ model LoginStreakLog {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, loginDate])
   @@map("login_streak_logs")
@@ -939,7 +939,7 @@ model Notification {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, isRead])
   @@index([userId, createdAt])

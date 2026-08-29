@@ -202,8 +202,11 @@ export class UsersService {
     if (!user) {
       throw new NotFoundException('User not found.');
     }
-    // Conversations, KYC verification, and game transactions all cascade
-    // (onDelete: Cascade in schema.prisma) — no manual cleanup needed.
+    // Every table referencing a user (conversations, KYC verification, game
+    // transactions, bonus wallets, offer claims, VIP upgrades, referrals and
+    // their commissions, cashback grants, login streak logs, notifications,
+    // ...) cascades — onDelete: Cascade in schema.prisma — so no manual
+    // cleanup is needed here.
     await this.prisma.user.delete({ where: { id: user.id } });
     return { success: true };
   }
