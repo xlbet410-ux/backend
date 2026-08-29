@@ -7,9 +7,18 @@ import { VipModule } from '../vip/vip.module';
 import { ReferralModule } from '../referral/referral.module';
 import { NotificationModule } from '../notification/notification.module';
 import { BalanceModule } from '../balance/balance.module';
+import { WithdrawalSettingsModule } from '../withdrawal-settings/withdrawal-settings.module';
 
 @Module({
-  imports: [OffersModule, BonusModule, VipModule, ReferralModule, NotificationModule, BalanceModule],
+  imports: [
+    OffersModule,
+    BonusModule,
+    VipModule,
+    ReferralModule,
+    NotificationModule,
+    BalanceModule,
+    WithdrawalSettingsModule,
+  ],
   controllers: [TransactionsController],
   providers: [TransactionsService],
 })

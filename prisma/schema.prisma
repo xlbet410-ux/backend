@@ -1121,3 +1121,16 @@ model RewardRedemption {
   @@index([userId, redeemedAt])
   @@map("reward_redemptions")
 }
+
+// Single-row table (fixed id 1) — CRM-controlled switches for which
+// verification method(s) a withdrawal accepts. Both true reproduces the
+// original either/or behavior; either can be turned off to require just
+// the other, and both off removes the gate entirely.
+model WithdrawalSettings {
+  id                      Int      @id @default(1)
+  kycEnabled              Boolean  @default(true) @map("kyc_enabled")
+  withdrawPasswordEnabled Boolean  @default(true) @map("withdraw_password_enabled")
+  updatedAt               DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("withdrawal_settings")
+}

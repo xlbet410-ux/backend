@@ -16,6 +16,7 @@ import { VipService } from '../vip/vip.service';
 import { ReferralService } from '../referral/referral.service';
 import { NotificationService } from '../notification/notification.service';
 import { BalanceService } from '../balance/balance.service';
+import { WithdrawalSettingsService } from '../withdrawal-settings/withdrawal-settings.service';
 import { Prisma } from '../../generated/prisma/client';
 
 type AgentAccount = {
@@ -68,6 +69,7 @@ export class TransactionsService {
     private readonly referralService: ReferralService,
     private readonly notificationService: NotificationService,
     private readonly balanceService: BalanceService,
+    private readonly withdrawalSettingsService: WithdrawalSettingsService,
   ) {}
 
   private toAdmin(row: CashTransactionRow) {
@@ -240,17 +242,48 @@ export class TransactionsService {
         'Your account has been deactivated. Contact support for help.',
       );
     }
-    // A withdrawal needs EITHER a verified KYC OR a correct withdrawal
-    // password — whichever the player has available. Never both.
-    if (user.kycVerification?.status !== 'verified') {
+    // Which verification method(s) a withdrawal accepts is CRM-controlled
+    // (WithdrawalSettings). Both enabled reproduces the original either/or
+    // behavior; either can be turned off to require just the other, and
+    // both off removes the gate entirely.
+    const settings = await this.withdrawalSettingsService.get();
+    const kycVerified = user.kycVerification?.status === 'verified';
+
+    if (settings.kycEnabled && settings.withdrawPasswordEnabled) {
+      if (!kycVerified) {
+        if (!user.withdrawPasswordHash) {
+          throw new ForbiddenException(
+            'Complete KYC verification, or set a withdrawal password in your profile settings, before requesting a withdrawal.',
+          );
+        }
+        if (!dto.withdrawPassword) {
+          throw new ForbiddenException(
+            'Enter your withdrawal password, or complete KYC verification, to continue.',
+          );
+        }
+        const matches = await bcrypt.compare(
+          dto.withdrawPassword,
+          user.withdrawPasswordHash,
+        );
+        if (!matches) {
+          throw new ForbiddenException('Incorrect withdrawal password.');
+        }
+      }
+    } else if (settings.kycEnabled) {
+      if (!kycVerified) {
+        throw new ForbiddenException(
+          'Complete KYC verification before requesting a withdrawal.',
+        );
+      }
+    } else if (settings.withdrawPasswordEnabled) {
       if (!user.withdrawPasswordHash) {
         throw new ForbiddenException(
-          'Complete KYC verification, or set a withdrawal password in your profile settings, before requesting a withdrawal.',
+          'Set a withdrawal password in your profile settings before requesting a withdrawal.',
         );
       }
       if (!dto.withdrawPassword) {
         throw new ForbiddenException(
-          'Enter your withdrawal password, or complete KYC verification, to continue.',
+          'Enter your withdrawal password to continue.',
         );
       }
       const matches = await bcrypt.compare(
