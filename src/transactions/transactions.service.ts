@@ -6,6 +6,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCashTransactionDto } from './dto/create-cash-transaction.dto';
 import { ResolveCashTransactionDto } from './dto/resolve-cash-transaction.dto';
@@ -239,10 +240,26 @@ export class TransactionsService {
         'Your account has been deactivated. Contact support for help.',
       );
     }
+    // A withdrawal needs EITHER a verified KYC OR a correct withdrawal
+    // password — whichever the player has available. Never both.
     if (user.kycVerification?.status !== 'verified') {
-      throw new ForbiddenException(
-        'Complete KYC verification before requesting a withdrawal.',
+      if (!user.withdrawPasswordHash) {
+        throw new ForbiddenException(
+          'Complete KYC verification, or set a withdrawal password in your profile settings, before requesting a withdrawal.',
+        );
+      }
+      if (!dto.withdrawPassword) {
+        throw new ForbiddenException(
+          'Enter your withdrawal password, or complete KYC verification, to continue.',
+        );
+      }
+      const matches = await bcrypt.compare(
+        dto.withdrawPassword,
+        user.withdrawPasswordHash,
       );
+      if (!matches) {
+        throw new ForbiddenException('Incorrect withdrawal password.');
+      }
     }
     const canWithdraw = await this.bonusService.canWithdraw(
       user.id,

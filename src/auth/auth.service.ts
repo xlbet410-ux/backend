@@ -12,6 +12,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { SetWithdrawPasswordDto } from './dto/set-withdraw-password.dto';
 import { OffersService } from '../offers/offers.service';
 import { ReferralService } from '../referral/referral.service';
 import { LoginStreakService } from '../login-streak/login-streak.service';
@@ -184,6 +185,62 @@ export class AuthService {
     await this.prisma.user.update({
       where: { id: user.id },
       data: { passwordHash },
+    });
+    return { success: true };
+  }
+
+  // --- Withdrawal password ---
+  // A second, separate password (distinct from the login password above)
+  // that lets a player withdraw without having completed KYC — see
+  // TransactionsService.createCashOut, which accepts either a verified KYC
+  // or a correct withdrawPasswordHash match, never both.
+
+  async getWithdrawPasswordStatus(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: BigInt(userId) },
+      select: { withdrawPasswordHash: true },
+    });
+    if (!user) {
+      throw new UnauthorizedException();
+    }
+    return { isSet: !!user.withdrawPasswordHash };
+  }
+
+  async setWithdrawPassword(userId: string, dto: SetWithdrawPasswordDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: BigInt(userId) },
+    });
+    if (!user) {
+      throw new UnauthorizedException();
+    }
+
+    // Only require/verify the old password once one already exists — the
+    // very first time a player sets this, there's nothing yet to check it
+    // against.
+    if (user.withdrawPasswordHash) {
+      if (!dto.oldPassword) {
+        throw new UnauthorizedException(
+          'Enter your current withdrawal password.',
+        );
+      }
+      const matches = await bcrypt.compare(
+        dto.oldPassword,
+        user.withdrawPasswordHash,
+      );
+      if (!matches) {
+        throw new UnauthorizedException(
+          'Current withdrawal password is incorrect.',
+        );
+      }
+    }
+
+    const withdrawPasswordHash = await bcrypt.hash(
+      dto.newPassword,
+      SALT_ROUNDS,
+    );
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { withdrawPasswordHash },
     });
     return { success: true };
   }

@@ -18,6 +18,12 @@ model User {
   fullName        String   @map("full_name") @db.VarChar(100)
   phoneNumber     String   @unique @map("phone_number") @db.VarChar(20)
   passwordHash    String   @map("password_hash") @db.VarChar(255)
+  // Separate PIN-style password gating withdrawals for a player who hasn't
+  // completed KYC yet — see AuthService.setWithdrawPassword and
+  // TransactionsService.createCashOut (either this OR a verified KYC
+  // satisfies the withdrawal gate; neither is required of the other). Null
+  // until the player sets one in profile settings.
+  withdrawPasswordHash String? @map("withdraw_password_hash") @db.VarChar(255)
   referralCode    String?  @map("referral_code") @db.VarChar(20)
   ownReferralCode String?  @unique @map("own_referral_code") @db.VarChar(20)
   isAdult         Boolean  @default(false) @map("is_adult")

@@ -14,6 +14,7 @@ import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { SetWithdrawPasswordDto } from './dto/set-withdraw-password.dto';
 import { ForgotPasswordSendOtpDto } from './dto/forgot-password-send-otp.dto';
 import { ForgotPasswordVerifyOtpDto } from './dto/forgot-password-verify-otp.dto';
 import { ForgotPasswordResetDto } from './dto/forgot-password-reset.dto';
@@ -55,6 +56,26 @@ export class AuthController {
     @Body() dto: ChangePasswordDto,
   ) {
     return this.authService.changePassword(req.user.userId, dto);
+  }
+
+  // --- Withdrawal password — separate from the login password above; see
+  // AuthService for how it factors into the cash-out KYC gate.
+
+  @UseGuards(JwtAuthGuard)
+  @Get('withdraw-password/status')
+  withdrawPasswordStatus(@Req() req: { user: { userId: string } }) {
+    return this.authService.getWithdrawPasswordStatus(req.user.userId);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @UseGuards(JwtAuthGuard)
+  @Post('withdraw-password')
+  @HttpCode(HttpStatus.OK)
+  setWithdrawPassword(
+    @Req() req: { user: { userId: string } },
+    @Body() dto: SetWithdrawPasswordDto,
+  ) {
+    return this.authService.setWithdrawPassword(req.user.userId, dto);
   }
 
   // --- Forgot password (unauthenticated) — mirrors the throttle shape of

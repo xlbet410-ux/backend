@@ -51,4 +51,11 @@ export class CreateCashTransactionDto {
   @IsOptional()
   @IsBoolean()
   noOffer?: boolean;
+
+  // Cash-out only — required when the player isn't KYC-verified, checked
+  // against User.withdrawPasswordHash. Ignored for a KYC-verified player
+  // (and for cash-in) even if sent. See TransactionsService.createCashOut.
+  @IsOptional()
+  @IsString()
+  withdrawPassword?: string;
 }
