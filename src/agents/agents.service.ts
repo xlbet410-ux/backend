@@ -314,36 +314,76 @@ export class AgentsService {
       if (!agent || !agent.isActive || agent.type !== 'commission') return;
       if (agent.commission.lessThanOrEqualTo(0)) return;
 
-      // Commission is capped to this player's deposit ("principal"), not
-      // their raw loss — the same cap getReferredPlayerStats already shows
-      // everywhere in the CRM/agent dashboard (commissionBasis =
-      // min(cumulativeLoss, cumulativeDeposit)). Computed cumulatively and
-      // topped up by the difference each bet, rather than per-bet, so a
-      // player who keeps losing well past their deposit doesn't let the
-      // agent earn more than that cap — this bet's own commissionAmount is
-      // just whatever's left to credit once the cap is (or isn't yet) hit.
+      // A completed withdrawal closes the book: everything before it stops
+      // counting, so the agent starts fresh from that point. Without this
+      // the whole calculation was lifetime-cumulative, and one big early
+      // win left the player permanently "up" — flooring the basis at 0 and
+      // killing that agent's earnings on them forever, even when the
+      // player later deposited again and lost the lot.
+      //
+      // Boundary is reviewedAt (when the money actually left) rather than
+      // createdAt, since a withdrawal only debits balance on approval and
+      // the player can still bet while it sits pending.
+      const lastCashOut = await this.prisma.cashTransaction.findFirst({
+        where: {
+          userId: playerUserId,
+          type: 'cash_out',
+          status: 'completed',
+          // Postgres sorts NULLs first on DESC, so an unreviewed row would
+          // otherwise win the ordering and hand back a null boundary.
+          reviewedAt: { not: null },
+        },
+        orderBy: { reviewedAt: 'desc' },
+        select: { reviewedAt: true },
+      });
+      const cycleStart = lastCashOut?.reviewedAt ?? null;
+
+      // Commission is capped to what the player deposited *in this cycle*,
+      // not their raw loss — a player who wins money back and re-wagers it
+      // can rack up losing bets well past what they ever paid in, and the
+      // agent's cut must never exceed cycleDeposit * rate. Computed
+      // cumulatively across the cycle and topped up by the difference each
+      // bet, so this bet's own commissionAmount is just whatever's left to
+      // credit once the cap is (or isn't yet) hit.
       const [depositAgg, betsAgg, alreadyRecordedAgg] = await Promise.all([
         this.prisma.cashTransaction.aggregate({
-          where: { userId: playerUserId, type: 'cash_in', status: 'completed' },
+          where: {
+            userId: playerUserId,
+            type: 'cash_in',
+            status: 'completed',
+            ...(cycleStart && { reviewedAt: { gte: cycleStart } }),
+          },
           _sum: { amount: true },
         }),
         this.prisma.gameTransaction.aggregate({
-          where: { userId: playerUserId },
+          where: {
+            userId: playerUserId,
+            ...(cycleStart && { createdAt: { gte: cycleStart } }),
+          },
           _sum: { betAmount: true, winAmount: true },
         }),
+        // Scoped to the same cycle as the basis above. Summed across all
+        // time it would cancel out the new cycle's commission and hand the
+        // agent nothing, reproducing the very bug this fixes.
         this.prisma.agentCommission.aggregate({
-          where: { agentId: agent.id, playerId: playerUserId },
+          where: {
+            agentId: agent.id,
+            playerId: playerUserId,
+            ...(cycleStart && { createdAt: { gte: cycleStart } }),
+          },
           _sum: { commissionAmount: true },
         }),
       ]);
 
-      const cumulativeDeposit = depositAgg._sum.amount ?? new Prisma.Decimal(0);
-      const cumulativeWagered = betsAgg._sum.betAmount ?? new Prisma.Decimal(0);
-      const cumulativeWon = betsAgg._sum.winAmount ?? new Prisma.Decimal(0);
-      const cumulativeLoss = Prisma.Decimal.max(0, cumulativeWagered.sub(cumulativeWon));
-      const cappedBasis = Prisma.Decimal.min(cumulativeLoss, cumulativeDeposit);
+      const cycleDeposit = depositAgg._sum.amount ?? new Prisma.Decimal(0);
+      const cycleWagered = betsAgg._sum.betAmount ?? new Prisma.Decimal(0);
+      const cycleWon = betsAgg._sum.winAmount ?? new Prisma.Decimal(0);
+      const cycleLoss = Prisma.Decimal.max(0, cycleWagered.sub(cycleWon));
+      const cappedBasis = Prisma.Decimal.min(cycleLoss, cycleDeposit);
       const totalOwed = cappedBasis.mul(agent.commission).div(100);
       const alreadyRecorded = alreadyRecordedAgg._sum.commissionAmount ?? new Prisma.Decimal(0);
+      // Floored at 0, never negative: commission already earned is locked
+      // in, so a player winning some of it back later reduces nothing.
       const commissionAmount = Prisma.Decimal.max(0, totalOwed.sub(alreadyRecorded));
 
       // Dedup via the unique constraint on sourceGameTransactionId — a
@@ -447,27 +487,26 @@ export class AgentsService {
   ) {
     const id = BigInt(agentId);
     const range = this.resolvePeriodRange(period, date);
-    const [agent, players] = await Promise.all([
-      this.prisma.agent.findUnique({ where: { id }, select: { commission: true } }),
-      this.prisma.user.findMany({
-        where: { referredByAgentId: id },
-        select: { id: true, fullName: true, memberId: true, createdAt: true },
-        orderBy: { createdAt: 'desc' },
-      }),
-    ]);
+    // The agent's own commission rate is no longer read here: every figure
+    // below comes from the ledger, which stores the rate that applied when
+    // each row was written.
+    const players = await this.prisma.user.findMany({
+      where: { referredByAgentId: id },
+      select: { id: true, fullName: true, memberId: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
     if (players.length === 0) {
       return {
         players: [],
         totals: { deposit: 0, withdraw: 0, wagered: 0, won: 0, loss: 0, commission: 0, adminAmount: 0 },
       };
     }
-    const commissionRate = Number(agent?.commission ?? 0);
     const playerIds = players.map((p) => p.id);
     const dateFilter = range
       ? { createdAt: { gte: range.from, lt: range.to } }
       : {};
 
-    const [deposits, withdrawals, bets] = await Promise.all([
+    const [deposits, withdrawals, bets, commissionRows] = await Promise.all([
       this.prisma.cashTransaction.groupBy({
         by: ['userId'],
         where: { userId: { in: playerIds }, type: 'cash_in', status: 'completed', ...dateFilter },
@@ -483,6 +522,15 @@ export class AgentsService {
         where: { userId: { in: playerIds }, ...dateFilter },
         _sum: { betAmount: true, winAmount: true },
       }),
+      // Read straight from the ledger rather than recomputing a basis here.
+      // The basis is cycle-scoped now (see recordLossCommission), which a
+      // plain date-range recalculation can't reproduce, and recomputing it
+      // is what made this screen disagree with what the agent actually
+      // earned. The ledger is the money, so the display follows it.
+      this.prisma.agentCommission.findMany({
+        where: { agentId: id, playerId: { in: playerIds }, ...dateFilter },
+        select: { playerId: true, commissionAmount: true, commissionRate: true },
+      }),
     ]);
 
     const depositByUser = new Map(deposits.map((d) => [d.userId.toString(), Number(d._sum.amount ?? 0)]));
@@ -490,23 +538,34 @@ export class AgentsService {
     const wageredByUser = new Map(bets.map((b) => [b.userId.toString(), Number(b._sum.betAmount ?? 0)]));
     const wonByUser = new Map(bets.map((b) => [b.userId.toString(), Number(b._sum.winAmount ?? 0)]));
 
+    // Each row's own stored rate, not the agent's current one, so rows
+    // already earned stay correct if the rate is changed later. Same
+    // derivation getWalletSummary uses: commissionAmount = basisIncrement *
+    // rate/100, so the platform's share is amount * (100 - rate) / rate.
+    const commissionByUser = new Map<string, number>();
+    const adminByUser = new Map<string, number>();
+    for (const row of commissionRows) {
+      const key = row.playerId.toString();
+      const amount = Number(row.commissionAmount);
+      const rate = Number(row.commissionRate);
+      commissionByUser.set(key, (commissionByUser.get(key) ?? 0) + amount);
+      if (rate > 0) {
+        adminByUser.set(key, (adminByUser.get(key) ?? 0) + (amount * (100 - rate)) / rate);
+      }
+    }
+
     const rows = players.map((p) => {
       const key = p.id.toString();
       const wagered = wageredByUser.get(key) ?? 0;
       const won = wonByUser.get(key) ?? 0;
       const loss = Math.max(0, wagered - won);
       const deposit = depositByUser.get(key) ?? 0;
-      // Commission is capped at what the player has actually deposited —
-      // Total Loss can run past that (e.g. wagering wins back into more
-      // bets), but the agent's cut never exceeds deposit * rate. Total Loss
-      // itself is shown uncapped, unchanged, for transparency.
-      const commissionBasis = Math.min(loss, deposit);
-      const commission = (commissionBasis * commissionRate) / 100;
-      // The platform's retained share of the same capped basis — whatever
-      // isn't paid out as agent commission. Purely a display figure derived
-      // from the existing commissionBasis/commission numbers above; doesn't
-      // feed into any payout calculation.
-      const adminAmount = commissionBasis - commission;
+      // Both come from the AgentCommission ledger, so this screen shows
+      // what was actually earned and can never drift from the settlement
+      // figures. Deposit/withdraw/wagered/won/loss above stay raw period
+      // totals, uncapped, unchanged, for transparency.
+      const commission = commissionByUser.get(key) ?? 0;
+      const adminAmount = adminByUser.get(key) ?? 0;
       return {
         id: key,
         fullName: p.fullName,
