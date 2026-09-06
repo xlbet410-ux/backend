@@ -2,6 +2,12 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GamesService } from '../games/games.service';
 
+// The CRM's Game History tab covers a rolling week of play rather than a
+// fixed row count — a take:100 silently cut an active player off mid-week
+// with nothing in the UI saying so. Cash transactions and bonus wallets
+// deliberately keep their own take:100 (see getFullHistory).
+const GAME_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
 type UserWithDetails = {
   id: bigint;
   memberId: string;
@@ -156,9 +162,11 @@ export class UsersService {
           take: 100,
         }),
         this.prisma.gameTransaction.findMany({
-          where: { userId },
+          where: {
+            userId,
+            createdAt: { gte: new Date(Date.now() - GAME_HISTORY_WINDOW_MS) },
+          },
           orderBy: { createdAt: 'desc' },
-          take: 100,
         }),
         this.gamesService.getGameNameMap(),
       ]);
