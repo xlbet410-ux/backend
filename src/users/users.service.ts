@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GamesService } from '../games/games.service';
-import { Prisma } from '../../generated/prisma/client';
+import { groupIntoRounds, toRoundResponse } from '../common/game-rounds.util';
 
 // The CRM's Game History tab covers a rolling week of play rather than a
 // fixed row count — a take:100 silently cut an active player off mid-week
@@ -192,81 +192,10 @@ export class UsersService {
         claimedAt: b.claimedAt.toISOString(),
         expiresAt: b.expiresAt?.toISOString() ?? null,
       })),
-      gameTransactions: this.toRoundHistory(gameTransactions, nameByUid),
+      gameTransactions: groupIntoRounds(gameTransactions).map((r) =>
+        toRoundResponse(r, nameByUid.get(r.gameUid) ?? r.gameUid),
+      ),
     };
-  }
-
-  /**
-   * Collapses raw provider callbacks into one entry per round.
-   *
-   * A round is settled in more than one callback: the stake arrives first,
-   * the payout second, each with its own serial_number (the idempotency
-   * key) but sharing the same game_round. Rendered one card per row, a
-   * single spin therefore showed up twice, and the payout half read
-   * "bet 0, win X" — which looks like a player winning without staking
-   * anything, but is just the other half of a bet recorded moments
-   * earlier. Summing by round puts the stake and the payout back together.
-   *
-   * Keyed by gameUid as well as game_round, so a round id that a different
-   * provider happens to reuse can never merge two unrelated games. Betting
-   * twice in one round (Aviator allows exactly this) correctly collapses
-   * into a single round showing total staked and total returned.
-   */
-  private toRoundHistory(
-    rows: {
-      id: bigint;
-      gameUid: string;
-      gameRound: string;
-      betAmount: Prisma.Decimal;
-      winAmount: Prisma.Decimal;
-      createdAt: Date;
-    }[],
-    nameByUid: Map<string, string>,
-  ) {
-    const rounds = new Map<
-      string,
-      {
-        id: string;
-        gameUid: string;
-        bet: Prisma.Decimal;
-        win: Prisma.Decimal;
-        createdAt: Date;
-      }
-    >();
-
-    for (const row of rows) {
-      // A blank round id can't identify anything, so those rows stay
-      // separate (keyed by their own id) rather than collapsing every bet
-      // on that game into one meaningless card.
-      const key = row.gameRound
-        ? `${row.gameUid}::${row.gameRound}`
-        : `row::${row.id.toString()}`;
-      const round = rounds.get(key);
-      if (round) {
-        round.bet = round.bet.add(row.betAmount);
-        round.win = round.win.add(row.winAmount);
-        continue;
-      }
-      // Rows arrive newest-first, so the first one seen for a round is its
-      // latest event, and Map preserves that order for the response.
-      rounds.set(key, {
-        id: row.id.toString(),
-        gameUid: row.gameUid,
-        bet: row.betAmount,
-        win: row.winAmount,
-        createdAt: row.createdAt,
-      });
-    }
-
-    return [...rounds.values()].map((r) => ({
-      id: r.id,
-      gameUid: r.gameUid,
-      gameName: nameByUid.get(r.gameUid) ?? r.gameUid,
-      betAmount: r.bet.toString(),
-      winAmount: r.win.toString(),
-      net: r.win.sub(r.bet).toString(),
-      createdAt: r.createdAt.toISOString(),
-    }));
   }
 
   async remove(id: string) {

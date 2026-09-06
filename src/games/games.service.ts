@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { groupIntoRounds, toRoundResponse } from '../common/game-rounds.util';
 import { BonusService } from '../bonus/bonus.service';
 import { VipService } from '../vip/vip.service';
 import { ReferralService } from '../referral/referral.service';
@@ -66,6 +67,10 @@ const NINE_WICKET_ACCOUNT_LENGTH = 6;
 // used for every other provider, hence the separate column.
 const NINE_WICKET_ACCOUNT_CHARS = 'abcdefghijklmnopqrstuvwxyz';
 const NINE_WICKET_ACCOUNT_PATTERN = /^[a-z]{6}$/;
+
+// A round normally arrives as two callbacks (stake, then settlement), so a
+// page of N rounds needs about 2N rows off the table. See groupIntoRounds.
+const ROWS_PER_ROUND = 2;
 
 type CallbackPayload = {
   game_uid: string;
@@ -555,15 +560,25 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
     return new Map(catalog.map((g) => [g.gameUid, g.name]));
   }
 
-  /** Player's own bet-by-bet history — profile page "Game History" tab. */
+  /**
+   * Player's own round-by-round history — profile page "Game History" tab.
+   *
+   * Paginates over rows but returns rounds, and a round is normally two
+   * rows (stake, then settlement — see groupIntoRounds). So a page of N
+   * rounds needs roughly 2N rows fetched, and `total` counts rows, not
+   * rounds. `hasMore` is therefore derived from whether the row query came
+   * back full, which is the only thing that actually says whether older
+   * history exists.
+   */
   async getMyGameHistory(userId: bigint, page = 1, pageSize = 30) {
     const size = Math.min(pageSize, 100);
+    const rowsPerPage = size * ROWS_PER_ROUND;
     const [rows, total, catalog] = await Promise.all([
       this.prisma.gameTransaction.findMany({
         where: { userId },
         orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * size,
-        take: size,
+        skip: (page - 1) * rowsPerPage,
+        take: rowsPerPage,
       }),
       this.prisma.gameTransaction.count({ where: { userId } }),
       this.ensureCatalog(),
@@ -572,14 +587,10 @@ export class GamesService implements OnModuleInit, OnModuleDestroy {
 
     return {
       total,
-      games: rows.map((r) => ({
-        id: r.id.toString(),
-        gameName: nameByUid.get(r.gameUid) ?? r.gameUid,
-        betAmount: r.betAmount.toString(),
-        winAmount: r.winAmount.toString(),
-        net: r.winAmount.sub(r.betAmount).toString(),
-        createdAt: r.createdAt.toISOString(),
-      })),
+      hasMore: rows.length === rowsPerPage,
+      games: groupIntoRounds(rows).map((r) =>
+        toRoundResponse(r, nameByUid.get(r.gameUid) ?? r.gameUid),
+      ),
     };
   }
 
