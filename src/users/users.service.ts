@@ -235,7 +235,12 @@ export class UsersService {
     >();
 
     for (const row of rows) {
-      const key = `${row.gameUid}::${row.gameRound}`;
+      // A blank round id can't identify anything, so those rows stay
+      // separate (keyed by their own id) rather than collapsing every bet
+      // on that game into one meaningless card.
+      const key = row.gameRound
+        ? `${row.gameUid}::${row.gameRound}`
+        : `row::${row.id.toString()}`;
       const round = rounds.get(key);
       if (round) {
         round.bet = round.bet.add(row.betAmount);
